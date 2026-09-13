@@ -11,6 +11,48 @@ from mathutils import Matrix, Quaternion, Vector
 from .. import utils
 
 
+class DESTROY_OT_toggle_split(Operator):
+    """Toggle whether one piece splits during destruction.
+
+    Writes the same 'use_split' property a checkbox bound directly to a
+    splitting_object_settings item would, but through an operator instead of a
+    direct property widget: in this Blender version, committing a property widget
+    on a CollectionProperty item (regardless of addon, property type, or content -
+    confirmed with an isolated test panel unrelated to this addon) stalls the UI
+    for several seconds, while an operator-driven write to the exact same property
+    is instant.
+    """
+    bl_idname = 'bfme.toggle_split_object'
+    bl_label = 'Toggle Split'
+    bl_options = {'INTERNAL'}
+
+    index: IntProperty()
+
+    def execute(self, context):
+        items = context.scene.splitting_object_settings
+        if 0 <= self.index < len(items):
+            items[self.index].use_split = not items[self.index].use_split
+        return {'FINISHED'}
+
+
+class DESTROY_OT_adjust_split_count(Operator):
+    """Step a piece's target split count up or down. See DESTROY_OT_toggle_split
+    for why this goes through an operator instead of a direct property widget."""
+    bl_idname = 'bfme.adjust_split_count'
+    bl_label = 'Adjust Piece Count'
+    bl_options = {'INTERNAL'}
+
+    index: IntProperty()
+    delta: IntProperty()
+
+    def execute(self, context):
+        items = context.scene.splitting_object_settings
+        if 0 <= self.index < len(items):
+            item = items[self.index]
+            item.split_count = max(2, min(100, item.split_count + self.delta))
+        return {'FINISHED'}
+
+
 class DESTROY_OT_create(Operator):
     bl_idname = 'bfme.destroy_animation'
     bl_label = 'Create Destroy Animation'
@@ -171,7 +213,7 @@ class DESTROY_OT_create(Operator):
         for item in scene.splitting_object_settings:
             if not item.use_split:
                 continue
-            child = bpy.data.objects.get(item.name)
+            child = bpy.data.objects.get(item.object_name)
             if child is not None and child.parent == armature and child.name in scene.objects:
                 self.fracture_and_replace(context, child, armature, item.split_count, bone_targets)
 
@@ -186,12 +228,12 @@ class DESTROY_OT_create(Operator):
         for item in scene.splitting_object_settings:
             if item.use_split:
                 continue
-            child = bpy.data.objects.get(item.name)
+            child = bpy.data.objects.get(item.object_name)
             if child is not None and child.parent == armature and child.parent_type == 'BONE':
                 non_split_bones.add(child.parent_bone)
 
         bone_z_range = self._bone_z_ranges(armature)
-        timings = {item.name: (item.start_percent, item.end_percent) for item in scene.destroy_bone_settings}
+        timings = {item.bone_name: (item.start_percent, item.end_percent) for item in scene.destroy_bone_settings}
 
         original_frame = scene.frame_current
         scene.frame_start = 0
@@ -310,14 +352,20 @@ class DESTROY_OT_create(Operator):
 
 
 class SplittingObjectSettings(PropertyGroup):
-    name: StringProperty(name='Object Name')
+    # 'name' is Blender's own identity field for collection items and is deliberately
+    # left at its default rather than mirroring the mesh object's name: a collection
+    # item whose 'name' coincides with a real Object's name makes Blender itself take
+    # several seconds to respond to any property change on that row (reproduced with a
+    # minimal, otherwise-empty test panel - a Blender-internal quirk, not addon logic)
+    object_name: StringProperty(name='Object Name')
     use_split: BoolProperty(name='Split', default=True)
     split_count: IntProperty(name='Pieces', default=4, min=2, max=100,
                              description='Target number of pieces')
 
 
 class DestroyBoneAnimSettings(PropertyGroup):
-    name: StringProperty(name='Bone Name')
+    # see SplittingObjectSettings.object_name for why the bone name isn't stored in 'name'
+    bone_name: StringProperty(name='Bone Name')
     start_percent: FloatProperty(
         name='Start', subtype='PERCENTAGE', default=0.0, min=0.0, max=100.0,
         description="Start of the bone's destruction as a percentage of the total length")
@@ -342,13 +390,13 @@ def update_destroy_settings(_self, context):
 
     if target.pose:
         for bone in target.pose.bones:
-            scene.destroy_bone_settings.add().name = bone.name
+            scene.destroy_bone_settings.add().bone_name = bone.name
 
     for child in target.children:
         if child.type != 'MESH':
             continue
         item = scene.splitting_object_settings.add()
-        item.name = child.name
+        item.object_name = child.name
         item.use_split = True
 
         largest = max(child.dimensions)
@@ -379,11 +427,19 @@ class DESTROY_PT_panel(Panel):
             if not len(scene.splitting_object_settings):
                 layout.label(text='No mesh children found.')
             else:
-                for item in scene.splitting_object_settings:
+                for idx, item in enumerate(scene.splitting_object_settings):
                     row = layout.row()
-                    row.prop(item, 'use_split', text=item.name)
+                    icon = 'CHECKBOX_HLT' if item.use_split else 'CHECKBOX_DEHLT'
+                    toggle = row.operator('bfme.toggle_split_object', text=item.object_name,
+                                          icon=icon, emboss=False)
+                    toggle.index = idx
                     if item.use_split:
-                        row.prop(item, 'split_count')
+                        stepper = row.row(align=True)
+                        minus = stepper.operator('bfme.adjust_split_count', text='', icon='REMOVE')
+                        minus.index, minus.delta = idx, -1
+                        stepper.label(text=str(item.split_count))
+                        plus = stepper.operator('bfme.adjust_split_count', text='', icon='ADD')
+                        plus.index, plus.delta = idx, 1
 
         row = layout.row()
         row.prop(scene, 'show_destroy_bone_settings', text='Per-Bone Timings',
@@ -399,7 +455,7 @@ class DESTROY_PT_panel(Panel):
             else:
                 for item in scene.destroy_bone_settings:
                     row = box.row(align=True)
-                    row.label(text=item.name)
+                    row.label(text=item.bone_name)
                     row.prop(item, 'start_percent', text='')
                     row.prop(item, 'end_percent', text='')
 
@@ -414,6 +470,8 @@ CLASSES = (
     SplittingObjectSettings,
     DestroyBoneAnimSettings,
     DESTROY_PT_panel,
+    DESTROY_OT_toggle_split,
+    DESTROY_OT_adjust_split_count,
     DESTROY_OT_create)
 
 SCENE_PROPERTIES = (

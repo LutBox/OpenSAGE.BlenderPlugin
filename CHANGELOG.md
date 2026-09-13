@@ -2,6 +2,18 @@
 
 ## v0.9.0
 
+* Bugfix: checking/unchecking a piece (or adjusting its piece count) in Destroy Animation's
+  'Splitting Objects' list made Blender's UI freeze for several seconds on every click. This
+  turned out to be a Blender engine issue, not something specific to this addon: on Blender
+  5.2.1, committing a property widget (a checkbox or number field drawn directly on a
+  CollectionProperty item, as used for this list) stalls the whole UI for a few seconds,
+  reproduced even with an isolated test panel that shared no code with this addon. Writing
+  the same properties from a small operator instead of a direct property widget avoids the
+  stall entirely, so the checkbox and piece-count controls now go through
+  `bfme.toggle_split_object` / `bfme.adjust_split_count`. The same underlying issue likely
+  also affects the per-bone timing sliders further down in the same panel; that hasn't been
+  fixed yet since it needs a different UI approach (a draggable percentage isn't a good fit
+  for an operator-driven +/- stepper)
 * Bugfix: importing some W3D models (mostly older Renegade/BFME-era assets) failed outright
   with a `UnicodeDecodeError`. String fields (mesh user text, texture names, shader/vertex
   material names and arguments) were always decoded as UTF-8, but older exporters wrote them
