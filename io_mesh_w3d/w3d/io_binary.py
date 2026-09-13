@@ -16,7 +16,14 @@ def read_string(io_stream):
     while ord(byte) != 0:
         str_buf.append(byte)
         byte = io_stream.read(1)
-    return (b''.join(str_buf)).decode('utf-8')
+    raw = b''.join(str_buf)
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError:
+        # older W3D exporters (Renegade/BFME era 3ds Max tools) wrote strings in
+        # the Windows ANSI codepage rather than UTF-8; cp1252 maps every byte
+        # value, so this fallback can never itself raise
+        return raw.decode('cp1252')
 
 
 def write_string(string, io_stream):

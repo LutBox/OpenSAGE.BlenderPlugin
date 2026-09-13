@@ -2,6 +2,11 @@
 
 ## v0.9.0
 
+* Bugfix: importing some W3D models (mostly older Renegade/BFME-era assets) failed outright
+  with a `UnicodeDecodeError`. String fields (mesh user text, texture names, shader/vertex
+  material names and arguments) were always decoded as UTF-8, but older exporters wrote them
+  in the Windows ANSI codepage, so any non-ASCII byte broke the import. Reading now falls
+  back to Windows-1252 whenever a string isn't valid UTF-8
 * Bugfix: importing a W3D model created a separate material per object even when several
   objects shared the exact same texture/material definition, instead of reusing one shared
   material. The importer already deduplicates materials after import by comparing everything

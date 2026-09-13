@@ -20,6 +20,14 @@ class TestIOBinary(TestCase):
                 bytes(expected, 'UTF-8') + struct.pack('B', 0b0))
             self.assertEqual(expected, read_string(io_stream))
 
+    def test_read_string_falls_back_to_cp1252_for_invalid_utf8(self):
+        # older W3D exporters wrote user_text/name fields in the Windows ANSI
+        # codepage; a byte like 0xee is not valid UTF-8 on its own but must
+        # still be read instead of raising
+        raw = b'Ver\xeenderung' + struct.pack('B', 0b0)
+        io_stream = io.BytesIO(raw)
+        self.assertEqual('Ver\xeenderung', read_string(io_stream))
+
     def test_write_string(self):
         expecteds = [
             'Teststring',
