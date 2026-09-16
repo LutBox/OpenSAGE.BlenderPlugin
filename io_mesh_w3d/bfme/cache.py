@@ -22,6 +22,7 @@ The Blender API is not thread safe, so everything that runs in a worker thread h
 to stay on this side of the fence.
 """
 
+import hashlib
 import os
 import shutil
 import tempfile
@@ -162,12 +163,21 @@ class AssetIndex(dict):
     wins the same priority order as everything else - so dependency resolution
     looks names up in 'textures' or 'models' instead, which cannot shadow one
     another. Behaves exactly like a plain dict otherwise.
+
+    The same references are also kept per origin, the archive or search path they
+    were found in, since several sources can ship an asset under the same name and
+    the model browser lists each of them.
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.textures = {}
         self.models = {}
+        self.models_by_origin = {}
+        self.textures_by_origin = {}
+        # highest priority first, the order the flat buckets above were merged in
+        self.archive_origins = []
+        self.search_origins = []
 
 
 def build_asset_index(big_paths, search_paths, wanted_exts, progress=None):
@@ -194,7 +204,7 @@ def build_asset_index(big_paths, search_paths, wanted_exts, progress=None):
 
         # results are merged in submission order rather than completion order, so
         # which archive wins a name does not depend on thread scheduling
-        for done, future in enumerate(archive_futures, start=1):
+        for done, (big_path, future) in enumerate(zip(big_paths, archive_futures), start=1):
             try:
                 references, model_references, texture_references = future.result()
             except Exception as error:
@@ -206,12 +216,14 @@ def build_asset_index(big_paths, search_paths, wanted_exts, progress=None):
                 index.models.setdefault(key, reference)
             for key, reference in texture_references.items():
                 index.textures.setdefault(key, reference)
+            index.models_by_origin[big_path] = model_references
+            index.textures_by_origin[big_path] = texture_references
             if progress is not None:
                 progress(done, len(archive_futures))
 
         # loose files override archives; later search paths override earlier ones,
         # same priority order the sequential version used
-        for future in search_futures:
+        for path, future in zip(valid_search_paths, search_futures):
             try:
                 references, model_references, texture_references = future.result()
             except Exception as error:
@@ -220,7 +232,11 @@ def build_asset_index(big_paths, search_paths, wanted_exts, progress=None):
             index.update(references)
             index.models.update(model_references)
             index.textures.update(texture_references)
+            index.models_by_origin[path] = model_references
+            index.textures_by_origin[path] = texture_references
 
+    index.archive_origins = list(big_paths)
+    index.search_origins = valid_search_paths[::-1]
     return index
 
 
@@ -269,9 +285,9 @@ def cached_asset_index():
 ##########################################################################
 
 
-def ensure_cache_dir():
+def ensure_cache_dir(directory=None):
     try:
-        os.makedirs(BIG_CACHE_DIR, exist_ok=True)
+        os.makedirs(BIG_CACHE_DIR if directory is None else directory, exist_ok=True)
     except OSError:
         pass
 
@@ -342,13 +358,14 @@ def asset_contains(reference, needle, chunk_size=READ_CHUNK_SIZE):
     return False
 
 
-def materialise(reference):
-    """Write the asset into the cache directory and return its path.
+def materialise(reference, directory=None):
+    """Write the asset into the cache directory, or the given one, and return its path.
 
     Reused when a copy of the right size is already there, so repeated imports of
     the same model do not rewrite it.
     """
-    target = os.path.join(BIG_CACHE_DIR, asset_name(reference))
+    directory = BIG_CACHE_DIR if directory is None else directory
+    target = os.path.join(directory, asset_name(reference))
     size = asset_size(reference)
 
     try:
@@ -357,7 +374,7 @@ def materialise(reference):
     except OSError:
         pass
 
-    ensure_cache_dir()
+    ensure_cache_dir(directory)
 
     # serialised so two threads materialising the same asset cannot interleave
     # their writes; the work itself is a seek and a read, so the lock is held briefly
@@ -409,7 +426,39 @@ def resolve_key(index, key):
 MAX_DEPENDENCY_DEPTH = 4
 
 
-def dependency_keys(index, key):
+def _lookup(index, kind, origins):
+    """A get(name) over the 'models' or 'textures' of the index.
+
+    Without origins that is the flat bucket, whatever wins overall. With them, the
+    given origins are asked first, in order, then the archives, then the search
+    paths: a mod's model that does not ship a texture itself gets it from the game,
+    as it does in game, rather than from another mod that is configured as well.
+    """
+    flat = getattr(index, kind, index)
+    by_origin = getattr(index, f'{kind}_by_origin', None)
+    if not origins or by_origin is None:
+        return flat.get
+
+    order = list(origins)
+    order += [origin for origin in index.archive_origins if origin not in order]
+    order += [origin for origin in index.search_origins if origin not in order]
+    buckets = [by_origin[origin] for origin in order if origin in by_origin]
+
+    def get(name):
+        for bucket in buckets:
+            reference = bucket.get(name)
+            if reference is not None:
+                return reference
+        return None
+
+    return get
+
+
+def find_model(index, key, origins=()):
+    return _lookup(index, 'models', origins)(key)
+
+
+def dependency_keys(index, key, origins=()):
     """Every asset the given model pulls in, transitively, as {name: reference}.
 
     A model names its skeleton and its textures; a skeleton can in turn name
@@ -417,9 +466,11 @@ def dependency_keys(index, key):
     Texture and hierarchy names are looked up in their own bucket rather than
     the flat index: a texture and an unrelated .w3d file can share a base name
     in the real asset libraries, and the flat index only keeps one of the two.
+    Given origins, the model and everything it needs come from those first, see
+    _lookup().
     """
-    models = getattr(index, 'models', index)
-    textures = getattr(index, 'textures', index)
+    find_w3d = _lookup(index, 'models', origins)
+    find_texture = _lookup(index, 'textures', origins)
 
     collected = {}
     pending = {key}
@@ -429,7 +480,7 @@ def dependency_keys(index, key):
         hierarchy_names = set()
         for current in pending:
             # only w3d files reference anything, textures are leaves
-            reference = models.get(current)
+            reference = find_w3d(current)
             if reference is not None:
                 found_textures, found_hierarchies = dependencies.referenced_names_by_kind(read_asset(reference))
                 texture_names |= found_textures
@@ -439,7 +490,7 @@ def dependency_keys(index, key):
         for name in hierarchy_names:
             if name == key or name in collected:
                 continue
-            reference = models.get(name)
+            reference = find_w3d(name)
             if reference is not None:
                 collected[name] = reference
                 pending.add(name)  # only hierarchies can reference anything further
@@ -448,7 +499,7 @@ def dependency_keys(index, key):
             # is common and not a self reference, so unlike a hierarchy it is not skipped
             if name in collected:
                 continue
-            reference = textures.get(name)
+            reference = find_texture(name)
             if reference is not None:
                 collected[name] = reference
 
@@ -458,7 +509,7 @@ def dependency_keys(index, key):
     return collected
 
 
-def stage_for_import(index, key):
+def stage_for_import(index, key, origins=()):
     """Put a model and everything it needs in one directory, and return its path.
 
     The W3D importer resolves a model's skeleton and textures by name relative to
@@ -466,26 +517,35 @@ def stage_for_import(index, key):
     dependencies are already beside it is imported where it lies and nothing is
     copied; otherwise the model and its dependencies are gathered in the cache
     directory, which is the only case where anything gets written.
+
+    Given origins, that source's copy of the model is staged (see _lookup()), in a
+    directory of its own, so it does not overwrite a same-named model staged from
+    another source.
     """
     # only models get staged; looked up in their own bucket, since in the flat index
     # a same-named texture can take the model's place
-    reference = getattr(index, 'models', index).get(key)
+    reference = find_model(index, key, origins)
     if reference is None:
         return None
 
-    needed = dependency_keys(index, key)
+    needed = dependency_keys(index, key, origins)
 
     if reference[0] == REF_FILE:
-        directory = os.path.dirname(reference[1])
-        if all(_sits_in(dep_reference, directory) for dep_reference in needed.values()):
+        model_directory = os.path.dirname(reference[1])
+        if all(_sits_in(dep_reference, model_directory) for dep_reference in needed.values()):
             return resolve(reference)
 
-    path = materialise(reference)
+    staging_directory = None
+    if origins:
+        token = hashlib.sha1('\n'.join(origins).encode('utf-8')).hexdigest()[:10]
+        staging_directory = os.path.join(BIG_CACHE_DIR, token)
+
+    path = materialise(reference, staging_directory)
     if path is None:
         return None
 
     for dep_reference in needed.values():
-        materialise(dep_reference)
+        materialise(dep_reference, staging_directory)
 
     return path
 
@@ -520,11 +580,8 @@ def clear(extra_dirs=(), extra_files=()):
 
 
 def materialised_count():
-    try:
-        with os.scandir(BIG_CACHE_DIR) as entries:
-            return sum(1 for entry in entries if entry.is_file())
-    except OSError:
-        return 0
+    # models staged for a specific source sit in a subdirectory of their own
+    return sum(len(files) for _, _, files in os.walk(BIG_CACHE_DIR))
 
 
 def cache_stats():

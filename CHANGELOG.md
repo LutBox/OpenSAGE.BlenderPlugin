@@ -2,6 +2,17 @@
 
 ## v0.9.0
 
+* the W3D Model Browser lists a model once per asset source that ships it, instead of only
+  the one that won overall. The list is grouped under a header per source: each asset search
+  path is a source of its own, named after its mod folder ('Edain-Mod', 'aotr', ...), and the
+  selected archives of a game form one ('BfMe 2', 'BfMe RotWK'). On a setup with three mods and
+  both games that is 1302 more models, e.g. Edain's and AOTR's quite different 'duoin_skn'.
+  Within one source only the copy that source uses is listed, e.g. a patch archive's over the
+  base game's. The name filter keeps a header exactly when a model below it matches.
+  Previewing or importing a model takes that source's copy, and its skeleton and textures from
+  that source first, then from the game archives, and only then from another mod, as the game
+  itself would. Models of different sources are staged in separate cache directories and get
+  separate previews, so one never overwrites the other
 * Bugfix: the W3D Model Browser did not list some models, and some previews were missing
   textures. Both came from a model and a texture sharing a name, which is common in mods
   ('art/w3d/hu_r_treb.w3d' using 'art/compiledtextures/hu_r_treb.dds'):

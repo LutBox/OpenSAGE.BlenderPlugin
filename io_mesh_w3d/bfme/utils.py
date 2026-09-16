@@ -38,19 +38,28 @@ def refresh_big_lists(scene):
             item.selected = previous.get(filepath, False)
 
 
-def selected_big_paths(scene):
-    """Selected .big archives, highest priority first."""
-    paths = []
-    for enabled_name, collection_name in (
-            ('use_bfme2_assets', 'bfme2_big_files'),
-            ('use_rotwk_assets', 'rotwk_big_files')):
+# (source id, label, enabled property, .big list property), in the order the settings show them
+GAMES = (
+    ('bfme2', 'BfMe 2', 'use_bfme2_assets', 'bfme2_big_files'),
+    ('rotwk', 'BfMe RotWK', 'use_rotwk_assets', 'rotwk_big_files'))
+
+
+def _selected_bigs_per_game(scene):
+    """[(source id, label, selected archives highest priority first)] per enabled game."""
+    games = []
+    for source_id, label, enabled_name, collection_name in GAMES:
         if not getattr(scene, enabled_name, False):
             continue
         selected = [item.filepath for item in getattr(scene, collection_name)
                     if item.selected and item.filepath and os.path.isfile(item.filepath)]
         selected.sort(reverse=True)
-        paths.extend(selected)
-    return paths
+        games.append((source_id, label, selected))
+    return games
+
+
+def selected_big_paths(scene):
+    """Selected .big archives, highest priority first."""
+    return [path for _, _, paths in _selected_bigs_per_game(scene) for path in paths]
 
 
 def search_paths(scene):
@@ -62,6 +71,35 @@ def search_paths(scene):
         if os.path.isdir(absolute):
             paths.append(absolute)
     return paths
+
+
+# folder names that say nothing about which mod a search path belongs to
+GENERIC_FOLDER_NAMES = {'art', '_mod', 'data', 'w3d', 'textures', 'compiledtextures'}
+
+
+def source_label(path):
+    """A readable name for a search path, 'C:/Modding/Edain-Mod/_mod/art' -> 'Edain-Mod'."""
+    parts = [part for part in os.path.normpath(path).split(os.sep) if part]
+    for part in reversed(parts):
+        if part.lower() not in GENERIC_FOLDER_NAMES:
+            return part
+    return path
+
+
+def asset_sources(scene):
+    """Every asset source, in the order the settings list them: [(id, label, origins)].
+
+    A search path is a source of its own, the selected archives of one game form one
+    source together. Origins are the search path or archives the source's assets are
+    indexed under (see cache.AssetIndex), highest priority first.
+    """
+    sources = [(path, source_label(path), [path]) for path in search_paths(scene)]
+    return sources + _selected_bigs_per_game(scene)
+
+
+def source_origins(scene, source_id):
+    """The origins of a source, or none if it is no longer configured."""
+    return next((origins for sid, _, origins in asset_sources(scene) if sid == source_id), [])
 
 
 ##########################################################################

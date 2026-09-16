@@ -602,6 +602,49 @@ class TestStagingForImport(CacheTestCase):
     def test_staging_an_unknown_key(self):
         self.assertIsNone(cache.stage_for_import({}, 'missing'))
 
+    def test_staging_for_a_source_takes_that_sources_model_and_textures(self):
+        edain = os.path.join(self.directory, 'edain')
+        aotr = os.path.join(self.directory, 'aotr')
+        self.loose('model.w3d', w3d_model(textures=['skin.dds']), subdirectory='edain')
+        self.loose('skin.dds', b'EDAIN', subdirectory='edain')
+        self.loose('model.w3d', w3d_model(textures=['skin.dds']), subdirectory='aotr')
+        self.loose('skin.dds', b'AOTR!', subdirectory='aotr')
+        # aotr is the later search path, so without a source it would win both names
+        index = cache.build_asset_index([], [edain, aotr], cache.CACHE_EXTENSIONS)
+
+        path = cache.stage_for_import(index, 'model', [edain])
+
+        # edain's copy has its texture right beside it, so it is imported where it lies
+        self.assertEqual(os.path.join(edain, 'model.w3d'), path)
+
+    def test_a_texture_a_source_lacks_comes_from_the_game_before_another_mod(self):
+        mod = os.path.join(self.directory, 'mod')
+        other_mod = os.path.join(self.directory, 'other_mod')
+        archive = self.archive('game.big', {'skin.dds': b'GAME-SKIN'})
+        self.loose('model.w3d', w3d_model(textures=['skin.dds']), subdirectory='mod')
+        self.loose('skin.dds', b'MOD--SKIN', subdirectory='other_mod')
+        index = cache.build_asset_index([archive], [mod, other_mod], cache.CACHE_EXTENSIONS)
+
+        path = cache.stage_for_import(index, 'model', [mod])
+
+        with open(os.path.join(os.path.dirname(path), 'skin.dds'), 'rb') as file:
+            self.assertEqual(b'GAME-SKIN', file.read())
+
+    def test_same_named_models_of_two_sources_are_staged_apart(self):
+        # same sizes on purpose: a copy of the right size already in place is reused
+        first = self.archive('first.big', {'model.w3d': w3d_model(textures=['skin.dds']), 'skin.dds': b'ONE'})
+        second = self.archive('second.big', {'model.w3d': w3d_model(textures=['skin.dds']), 'skin.dds': b'TWO'})
+        index = cache.build_asset_index([first, second], [], cache.CACHE_EXTENSIONS)
+
+        first_path = cache.stage_for_import(index, 'model', [first])
+        second_path = cache.stage_for_import(index, 'model', [second])
+
+        self.assertNotEqual(os.path.dirname(first_path), os.path.dirname(second_path))
+        for path, expected in ((first_path, b'ONE'), (second_path, b'TWO')):
+            with open(os.path.join(os.path.dirname(path), 'skin.dds'), 'rb') as file:
+                self.assertEqual(expected, file.read())
+        self.assertEqual(4, cache.materialised_count())
+
     def test_staging_brings_the_texture_not_a_same_named_model(self):
         """The regression this guards: a fence prop model and the fence texture
         both happened to be named 'pfence01' in the real assets, and the model

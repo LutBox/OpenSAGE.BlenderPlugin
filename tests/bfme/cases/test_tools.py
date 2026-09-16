@@ -12,6 +12,7 @@ from mathutils import Vector
 from io_mesh_w3d.bfme import cache, utils
 from io_mesh_w3d.bfme.tools import existing_animations, export_settings, model_browser, w3d_tools
 from io_mesh_w3d.common.utils.helpers import iter_action_fcurves
+from tests.bfme.cases.test_cache import write_big_archive
 from tests.utils import TestCase
 
 
@@ -236,10 +237,44 @@ class TestModelList(TestCase):
         models = self.write('w3d', 'hu_r_treb.w3d')
         # the later search path, so the texture is what the flat index keeps
         textures = self.write('compiledtextures', 'hu_r_treb.dds')
+        sources = [(models, 'Mod', [models]), (textures, 'Textures', [textures])]
 
-        listed = model_browser._collect_w3d_models([], [models, textures], force_refresh=True)
+        rows = model_browser._collect_w3d_models([], [models, textures], sources, force_refresh=True)
 
-        self.assertEqual([('hu_r_treb.w3d', 'hu_r_treb')], listed)
+        # a source without any models gets no header either
+        self.assertEqual([('Mod', '', models, True), ('hu_r_treb.w3d', 'hu_r_treb', models, False)], rows)
+
+    def test_a_model_shipped_by_two_sources_is_listed_under_each(self):
+        edain = self.write('Edain-Mod', 'hu_r_treb.w3d')
+        self.write('Edain-Mod', 'edain_only.w3d')
+        aotr = self.write('aotr', 'hu_r_treb.w3d')
+        sources = [(edain, 'Edain-Mod', [edain]), (aotr, 'aotr', [aotr])]
+
+        rows = model_browser._collect_w3d_models([], [edain, aotr], sources, force_refresh=True)
+
+        self.assertEqual([
+            ('Edain-Mod', '', edain, True),
+            ('edain_only.w3d', 'edain_only', edain, False),
+            ('hu_r_treb.w3d', 'hu_r_treb', edain, False),
+            ('aotr', '', aotr, True),
+            ('hu_r_treb.w3d', 'hu_r_treb', aotr, False)], rows)
+
+    def test_a_game_source_lists_the_copy_of_its_highest_priority_archive_once(self):
+        patch = write_big_archive(os.path.join(self.directory, 'patch.big'), {'Model.w3d': b'PATCH'})
+        base = write_big_archive(os.path.join(self.directory, 'base.big'), {'model.w3d': b'BASE'})
+        sources = [('bfme2', 'BfMe 2', [patch, base])]
+
+        rows = model_browser._collect_w3d_models([patch, base], [], sources, force_refresh=True)
+
+        self.assertEqual([('BfMe 2', '', 'bfme2', True), ('Model.w3d', 'model', 'bfme2', False)], rows)
+
+
+class TestAssetSources(TestCase):
+    def test_source_label_skips_folder_names_that_say_nothing_about_the_mod(self):
+        root = os.path.join('C:' + os.sep, 'Modding')
+
+        self.assertEqual('Edain-Mod', utils.source_label(os.path.join(root, 'Edain-Mod', '_mod', 'art') + os.sep))
+        self.assertEqual('aotr', utils.source_label(os.path.join(root, 'AOTR8.0', 'aotr', 'art')))
 
 
 class TestTextureExtensionReplacement(TestCase):

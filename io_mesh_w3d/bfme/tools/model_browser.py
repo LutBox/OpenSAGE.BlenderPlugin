@@ -1,6 +1,7 @@
 # <pep8 compliant>
 """Browse and import .w3d models from the asset cache, with rendered previews."""
 
+import hashlib
 import json
 import os
 import tempfile
@@ -128,19 +129,53 @@ class W3DModelItem(PropertyGroup):
     # until it is actually needed, at which point it gets materialised on demand
     key: StringProperty(name='Asset Key')
     filename: StringProperty(name='Filename')
+    # the asset source (see utils.asset_sources()) the model is listed under; several
+    # sources can ship a model of the same name, and each of them gets a row
+    source: StringProperty(name='Source')
+    # a row that names its source above that source's models rather than a model,
+    # 'filename' then holds the source's label
+    is_header: BoolProperty(name='Is Header', default=False)
 
 
 # bumped whenever scene.w3d_models is mutated, so the UIList's cached sort/filter
 # result is thrown away exactly when it stops being valid
 _list_generation = 0
 _filter_cache = None
+_model_count_cache = None
 
 
 def invalidate_list_cache():
-    global _list_generation, _filter_cache
+    global _list_generation, _filter_cache, _model_count_cache
 
     _list_generation += 1
     _filter_cache = None
+    _model_count_cache = None
+
+
+def _header_flags(items):
+    flags = [False] * len(items)
+    items.foreach_get('is_header', flags)
+    return flags
+
+
+def model_count(items):
+    """How many rows are models rather than headers, counted once per list change."""
+    global _model_count_cache
+
+    key = (_list_generation, len(items))
+    if _model_count_cache is None or _model_count_cache[0] != key:
+        _model_count_cache = (key, len(items) - sum(_header_flags(items)))
+    return _model_count_cache[1]
+
+
+def _add_rows(items, rows):
+    for filename, key, source, is_header in rows:
+        item = items.add()
+        item.filename = filename
+        item.key = key
+        item.source = source
+        if is_header:
+            item.is_header = True
 
 
 def _generate_preview_deferred():
@@ -163,9 +198,16 @@ def on_model_selection_changed(_self, _context):
 class W3D_UL_model_list(UIList):
     def draw_item(self, _context, layout, _data, item, _icon, _active_data, _active_propname, _index=0, _flt_flag=0):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            if item.is_header:
+                layout.label(text=item.filename, icon='FILE_FOLDER')
+                return
             row = layout.row(align=True)
+            # indented, so the models read as belonging to the header above them
+            row.separator(factor=2.0)
             row.label(text=item.filename, icon='MESH_CUBE')
-            row.operator('w3d.import_model', text='', icon='IMPORT', emboss=False).key = item.key
+            operator = row.operator('w3d.import_model', text='', icon='IMPORT', emboss=False)
+            operator.key = item.key
+            operator.source = item.source
         else:
             layout.alignment = 'CENTER'
             layout.label(text='', icon='MESH_CUBE')
@@ -196,23 +238,50 @@ class W3D_UL_model_list(UIList):
         flags = bpy.types.UI_UL_list.filter_items_by_name(
             self.filter_name, self.bitflag_filter_item, items, 'filename', reverse=False)
 
+        # a header's text is a source name, not a model name, so it is shown exactly
+        # when a model below it matches the filter
+        header = None
+        for row, is_header in enumerate(_header_flags(items)):
+            if is_header:
+                header = row
+                flags[row] = 0
+            elif flags[row] and header is not None:
+                flags[header] = self.bitflag_filter_item
+
         _filter_cache = (key, flags)
         return flags, []
 
 
-def _collect_w3d_models(big_paths, search_paths, force_refresh=False):
-    """Build the asset index and pick out the .w3d models. No bpy access, worker-thread safe.
+def _collect_w3d_models(big_paths, search_paths, sources, force_refresh=False):
+    """The model list's rows. No bpy access, worker-thread safe.
 
-    Sorted case insensitively, because this order is what ends up in the list:
-    the UIList deliberately does no reordering of its own, so that a redraw stays
-    cheap even with tens of thousands of models.
+    'sources' is a snapshot of utils.asset_sources(). Each source that has any
+    models gets a header row followed by its models, so a model shipped by several
+    sources is listed once under each of them. Within one source only the copy that
+    source actually uses is listed, e.g. a patch archive's over the base game's.
+
+    Rows are (filename, key, source id, is header), in final list order, models
+    sorted case insensitively: the UIList deliberately does no reordering of its
+    own, so that a redraw stays cheap even with tens of thousands of models.
     """
     index = cache.asset_index(big_paths, search_paths, cache.CACHE_EXTENSIONS, force_refresh=force_refresh)
-    # not the flat index: there a texture sharing a model's name ('hu_r_treb.dds'
-    # next to 'hu_r_treb.w3d') can take its place and hide the model from the list
-    models = [(cache.asset_name(reference), key) for key, reference in index.models.items()]
-    models.sort(key=lambda model: model[0].lower())
-    return models
+
+    rows = []
+    for source_id, label, origins in sources:
+        # models only, not the flat index: there a texture sharing a model's name
+        # ('hu_r_treb.dds' next to 'hu_r_treb.w3d') can take its place
+        models = {}
+        for origin in origins:
+            for key, reference in index.models_by_origin.get(origin, {}).items():
+                models.setdefault(key, reference)
+        if not models:
+            continue
+
+        rows.append((label, '', source_id, True))
+        rows.extend(sorted(
+            ((cache.asset_name(reference), key, source_id, False) for key, reference in models.items()),
+            key=lambda row: row[0].lower()))
+    return rows
 
 
 class W3D_OT_scan_models(Operator):
@@ -244,13 +313,14 @@ class W3D_OT_scan_models(Operator):
         # everything the worker needs is read here, on the main thread
         big_paths = utils.selected_big_paths(scene)
         search_paths = utils.search_paths(scene)
+        sources = utils.asset_sources(scene)
 
         self._pending = []
         self._cursor = 0
         self._models = None
 
         self._thread = threading.Thread(
-            target=self._scan, args=(big_paths, search_paths), daemon=True)
+            target=self._scan, args=(big_paths, search_paths, sources), daemon=True)
         self._thread.start()
 
         window_manager = context.window_manager
@@ -258,11 +328,11 @@ class W3D_OT_scan_models(Operator):
         window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
-    def _scan(self, big_paths, search_paths):
+    def _scan(self, big_paths, search_paths, sources):
         """Worker thread: builds the index, extracts nothing, no bpy access."""
         models = []
         try:
-            models = _collect_w3d_models(big_paths, search_paths)
+            models = _collect_w3d_models(big_paths, search_paths, sources)
         except Exception as error:
             print(f'[BFME_MODELS] indexing failed: {error}')
         finally:
@@ -283,10 +353,7 @@ class W3D_OT_scan_models(Operator):
         # re-slicing the list, which would copy the remainder on every timer tick
         if self._cursor < len(self._pending):
             end = min(self._cursor + self.BATCH_SIZE, len(self._pending))
-            for filename, key in self._pending[self._cursor:end]:
-                item = models.add()
-                item.filename = filename
-                item.key = key
+            _add_rows(models, self._pending[self._cursor:end])
             self._cursor = end
             invalidate_list_cache()
 
@@ -307,9 +374,10 @@ class W3D_OT_scan_models(Operator):
 
         self._close(context)
 
-        count = len(models)
+        count = model_count(models)
         if count:
-            context.scene.w3d_active_model_index = 0
+            # the first row is a source's header, select the model below it
+            context.scene.w3d_active_model_index = 1
             self.report({'INFO'}, f'Found {count} .w3d models')
         else:
             self.report({'WARNING'}, 'No .w3d models found. Make sure BfMe assets are selected.')
@@ -354,11 +422,11 @@ _startup_active_key = None
 _startup_scan_done = False
 
 
-def _startup_scan_worker(big_paths, search_paths):
+def _startup_scan_worker(big_paths, search_paths, sources):
     """Worker thread: builds the index and picks out the models, no bpy access."""
     global _startup_result
     try:
-        _startup_result = _collect_w3d_models(big_paths, search_paths, force_refresh=True)
+        _startup_result = _collect_w3d_models(big_paths, search_paths, sources, force_refresh=True)
     except Exception as error:
         print(f'[BFME_MODELS] startup scan failed: {error}')
         _startup_result = []
@@ -393,13 +461,15 @@ def _finish_startup_scan(scene, items):
     _startup_scan_done = True
 
     if _startup_active_key is not None:
+        # a name alone is ambiguous now that several sources can list it
         for index, item in enumerate(items):
-            if item.key == _startup_active_key:
+            if (item.source, item.key) == _startup_active_key:
                 if index != scene.w3d_active_model_index:
                     scene.w3d_active_model_index = index
                 break
         else:
-            scene.w3d_active_model_index = 0  # the model it pointed at is gone
+            # the model it pointed at is gone, select the first one below its header
+            scene.w3d_active_model_index = 1 if len(items) > 1 else 0
     _startup_active_key = None
 
     _tag_redraw()
@@ -419,10 +489,7 @@ def _apply_startup_batch():
 
     items = scene.w3d_models
     end = min(_startup_cursor + STARTUP_SCAN_BATCH_SIZE, len(_startup_pending))
-    for filename, key in _startup_pending[_startup_cursor:end]:
-        item = items.add()
-        item.filename = filename
-        item.key = key
+    _add_rows(items, _startup_pending[_startup_cursor:end])
     _startup_cursor = end
     invalidate_list_cache()
 
@@ -463,8 +530,9 @@ def _startup_scan_tick():
             return None
 
         items = scene.w3d_models
-        _startup_active_key = items[scene.w3d_active_model_index].key \
-            if 0 <= scene.w3d_active_model_index < len(items) else None
+        active = scene.w3d_active_model_index
+        _startup_active_key = (items[active].source, items[active].key) \
+            if 0 <= active < len(items) else None
 
         # the scan is authoritative, so the list is refilled from it rather than
         # diffed against whatever the opened .blend happened to have saved
@@ -488,7 +556,7 @@ def _startup_scan_tick():
         return None
 
     _startup_thread = threading.Thread(
-        target=_startup_scan_worker, args=(big_paths, search_paths), daemon=True)
+        target=_startup_scan_worker, args=(big_paths, search_paths, utils.asset_sources(scene)), daemon=True)
     _startup_thread.start()
     return STARTUP_SCAN_POLL_INTERVAL
 
@@ -552,12 +620,21 @@ class W3D_OT_generate_preview(Operator):
             return {'CANCELLED'}
 
         item = scene.w3d_models[index]
-        preview_path = os.path.join(PREVIEW_CACHE_DIR, f'w3d_preview_{item.filename}.png')
+        if item.is_header:
+            return {'CANCELLED'}
+
+        # the same model name can be listed under several sources, and each of them
+        # gets a preview of its own
+        origins = utils.source_origins(scene, item.source)
+        preview_id = f'{item.source}|{item.key}'
+        source_token = hashlib.sha1(item.source.encode('utf-8')).hexdigest()[:10]
+        preview_path = os.path.join(PREVIEW_CACHE_DIR, f'w3d_preview_{source_token}_{item.filename}.png')
+
         index = cache.cached_asset_index()
-        reference = getattr(index, 'models', index).get(item.key)
+        reference = cache.find_model(index, item.key, origins)
 
         # checked against the reference, so a cached preview costs no extraction
-        if is_preview_valid(item.key, reference, preview_path):
+        if is_preview_valid(preview_id, reference, preview_path):
             if self._show(context, preview_path):
                 return {'FINISHED'}
         elif os.path.exists(preview_path):
@@ -568,12 +645,12 @@ class W3D_OT_generate_preview(Operator):
 
         # the model's skeleton and textures come along, the importer looks them up
         # by name next to the file it is given
-        filepath = cache.stage_for_import(cache.cached_asset_index(), item.key)
+        filepath = cache.stage_for_import(index, item.key, origins)
         if filepath is None:
             self.report({'WARNING'}, f'Could not read {item.filename}')
             return {'CANCELLED'}
 
-        self._render(context, item.key, reference, filepath, preview_path)
+        self._render(context, preview_id, reference, filepath, preview_path)
         return {'FINISHED'}
 
     def _show(self, context, preview_path):
@@ -745,11 +822,13 @@ class W3D_OT_import_model(Operator):
     bl_description = 'Import this W3D model'
 
     key: StringProperty()
+    source: StringProperty()
 
-    def execute(self, _context):
+    def execute(self, context):
         # the model and its skeleton and textures get written out at this point,
-        # rather than the whole archive
-        filepath = cache.stage_for_import(cache.cached_asset_index(), self.key)
+        # rather than the whole archive; taken from the source it is listed under
+        origins = utils.source_origins(context.scene, self.source)
+        filepath = cache.stage_for_import(cache.cached_asset_index(), self.key, origins)
         if filepath is None:
             self.report({'ERROR'}, f"Could not read '{self.key}'. Re-scan the models.")
             return {'CANCELLED'}
@@ -795,7 +874,7 @@ class W3D_IMPORTER_PT_panel(Panel):
             return
 
         layout.separator()
-        layout.label(text=f'Total: {len(scene.w3d_models)} models', icon='MESH_DATA')
+        layout.label(text=f'Total: {model_count(scene.w3d_models)} models', icon='MESH_DATA')
 
         layout.row().template_list(
             'W3D_UL_model_list', '', scene, 'w3d_models', scene, 'w3d_active_model_index', rows=10)
