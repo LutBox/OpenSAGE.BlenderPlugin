@@ -20,6 +20,9 @@ PREVIEW_INDEX_FILE = os.path.join(tempfile.gettempdir(), 'bfme_w3d_preview_index
 
 PREVIEW_IMAGE_NAME = 'W3D_Preview_Temp'
 PREVIEW_RESOLUTION = 256
+# stored with every preview; bump it when previews rendered before a change are wrong
+# and have to be rendered again. 2: textures named like their model were left out
+PREVIEW_VERSION = 2
 
 _preview_index = None
 
@@ -90,7 +93,9 @@ def is_preview_valid(key, reference, preview_path):
         return False
 
     entry = load_preview_index().get(key)
-    return entry is not None and entry.get('w3d_signature') == signature
+    return (entry is not None
+            and entry.get('version') == PREVIEW_VERSION
+            and entry.get('w3d_signature') == signature)
 
 
 def update_preview_index(key, reference, preview_path):
@@ -100,6 +105,7 @@ def update_preview_index(key, reference, preview_path):
 
     index = load_preview_index()
     index[key] = {
+        'version': PREVIEW_VERSION,
         'w3d_signature': signature,
         'preview_path': preview_path,
         'generated_at': time.time()}
@@ -202,10 +208,9 @@ def _collect_w3d_models(big_paths, search_paths, force_refresh=False):
     cheap even with tens of thousands of models.
     """
     index = cache.asset_index(big_paths, search_paths, cache.CACHE_EXTENSIONS, force_refresh=force_refresh)
-    models = [
-        (cache.asset_name(reference), key)
-        for key, reference in index.items()
-        if cache.asset_name(reference).lower().endswith('.w3d')]
+    # not the flat index: there a texture sharing a model's name ('hu_r_treb.dds'
+    # next to 'hu_r_treb.w3d') can take its place and hide the model from the list
+    models = [(cache.asset_name(reference), key) for key, reference in index.models.items()]
     models.sort(key=lambda model: model[0].lower())
     return models
 
@@ -548,7 +553,8 @@ class W3D_OT_generate_preview(Operator):
 
         item = scene.w3d_models[index]
         preview_path = os.path.join(PREVIEW_CACHE_DIR, f'w3d_preview_{item.filename}.png')
-        reference = cache.cached_asset_index().get(item.key)
+        index = cache.cached_asset_index()
+        reference = getattr(index, 'models', index).get(item.key)
 
         # checked against the reference, so a cached preview costs no extraction
         if is_preview_valid(item.key, reference, preview_path):

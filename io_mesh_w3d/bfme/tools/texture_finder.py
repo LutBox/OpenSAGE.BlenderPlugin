@@ -164,7 +164,7 @@ class TEXTURE_OT_load_files(_ThreadedOperator):
         job.report('Indexing assets...', 20)
         index = cache.asset_index(
             payload['big_paths'], payload['search_paths'],
-            cache.SUPPORTED_EXTENSIONS | {'.w3d'},
+            cache.CACHE_EXTENSIONS,
             progress=lambda done, total: job.report(f'Indexing archives ({done}/{total})...', 20))
 
         # only the textures actually missing from the scene get resolved, which for
@@ -172,7 +172,7 @@ class TEXTURE_OT_load_files(_ThreadedOperator):
         job.report('Resolving textures...', 70)
         resolved = {}
         for name, key in payload['candidates']:
-            path = cache.resolve(index.get(key))
+            path = cache.resolve(index.textures.get(key))
             if path is not None:
                 resolved[name] = path
 

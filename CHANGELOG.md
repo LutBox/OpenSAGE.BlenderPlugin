@@ -2,6 +2,23 @@
 
 ## v0.9.0
 
+* Bugfix: the W3D Model Browser did not list some models, and some previews were missing
+  textures. Both came from a model and a texture sharing a name, which is common in mods
+  ('art/w3d/hu_r_treb.w3d' using 'art/compiledtextures/hu_r_treb.dds'):
+  * the list was built from the part of the asset index that keeps only one asset per name,
+    so whenever the texture won that slot the model was left out - 157 models on a full
+    Edain + BfMe II setup. The list, the preview and the import now look models up among
+    models only. The texture finder had the mirror image of this and could relink a missing
+    texture to a same-named .w3d; it now looks among textures only
+  * collecting what a model needs next to it skipped any texture named like the model
+    itself, so that texture was never staged for the preview or the import. When it was
+    the only one, the model was even imported where it lies, away from all its textures
+  * searching 'Existing Animations' rebuilt the shared asset index with .w3d files only,
+    after which every preview and import from the model browser found no textures at all
+    until the next scan. All tools now index the same file types, which now also includes
+    .jpg/.png/.bmp textures a model may use
+  * previews rendered before this fix are rendered again once, since they were kept for as
+    long as the model itself did not change
 * Bugfix: checking/unchecking a piece (or adjusting its piece count) in Destroy Animation's
   'Splitting Objects' list made Blender's UI freeze for several seconds on every click. This
   turned out to be a Blender engine issue, not something specific to this addon: on Blender

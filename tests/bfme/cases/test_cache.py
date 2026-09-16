@@ -106,6 +106,11 @@ class TestAssetKeys(CacheTestCase):
     def test_path_signature_skips_missing_files(self):
         self.assertEqual((), cache.path_signature([os.path.join(self.directory, 'gone.big')]))
 
+    def test_the_shared_index_covers_every_texture_extension(self):
+        # a tool indexing fewer extensions would replace the one cached index with
+        # one in which the model browser cannot find a model's textures
+        self.assertTrue(cache.SUPPORTED_EXTENSIONS | {'.w3d'} <= cache.CACHE_EXTENSIONS)
+
 
 class TestAssetIndex(CacheTestCase):
     def test_loose_files_are_referenced_where_they_are(self):
@@ -512,6 +517,16 @@ class TestDependencyScanning(CacheTestCase):
 
         self.assertEqual(b'TEXTUREDATA', cache.read_asset(deps['pfence01']))
 
+    def test_dependency_keys_includes_a_texture_named_like_the_model(self):
+        archive = self.archive('assets.big', {
+            'treefir01.w3d': w3d_model(textures=['treefir01.dds']),
+            'treefir01.dds': b'TEXTUREDATA'})
+        index = cache.build_asset_index([archive], [], cache.CACHE_EXTENSIONS)
+
+        deps = cache.dependency_keys(index, 'treefir01')
+
+        self.assertEqual(b'TEXTUREDATA', cache.read_asset(deps['treefir01']))
+
 
 class TestStagingForImport(CacheTestCase):
     def test_an_archived_model_brings_its_skeleton_and_textures_along(self):
@@ -605,6 +620,25 @@ class TestStagingForImport(CacheTestCase):
         self.assertEqual(['model.w3d', 'pfence01.tga'], staged)
         with open(os.path.join(cache.BIG_CACHE_DIR, 'pfence01.tga'), 'rb') as file:
             self.assertEqual(b'TEXTUREDATA', file.read())
+
+    def test_staging_a_model_whose_texture_shares_its_name(self):
+        """How a mod lays it out: 'art/w3d/hu_r_treb.w3d' using
+        'art/compiledtextures/hu_r_treb.dds'. The texture comes from the later
+        search path, so it is the one the flat index keeps for that name.
+        """
+        model = w3d_model(textures=['hu_r_treb.dds'])
+        self.loose('hu_r_treb.w3d', model, subdirectory='w3d')
+        self.loose('hu_r_treb.dds', b'TEXTUREDATA', subdirectory='compiledtextures')
+        index = cache.build_asset_index([], [
+            os.path.join(self.directory, 'w3d'),
+            os.path.join(self.directory, 'compiledtextures')], cache.CACHE_EXTENSIONS)
+
+        path = cache.stage_for_import(index, 'hu_r_treb')
+
+        self.assertEqual('hu_r_treb.w3d', os.path.basename(path))
+        with open(path, 'rb') as file:
+            self.assertEqual(model, file.read())
+        self.assertEqual(['hu_r_treb.dds', 'hu_r_treb.w3d'], sorted(os.listdir(cache.BIG_CACHE_DIR)))
 
 
 class TestMaintenance(CacheTestCase):

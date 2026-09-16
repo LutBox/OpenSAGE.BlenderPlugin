@@ -36,17 +36,15 @@ class BFME_OT_search_animations(Operator):
             search_paths.append(os.path.dirname(bpy.data.filepath))
 
         utils.refresh_big_lists(scene)
-        index = cache.asset_index(utils.selected_big_paths(scene), search_paths, {'.w3d'})
+        index = cache.asset_index(utils.selected_big_paths(scene), search_paths, cache.CACHE_EXTENSIONS)
 
         needle = skeleton_name.encode('utf-8')
         name_filter = scene.existing_anim_filter.strip().lower()
 
         found = 0
-        for key, reference in sorted(index.items()):
+        for key, reference in sorted(index.models.items()):
             filename = cache.asset_name(reference)
             lowered = filename.lower()
-            if not lowered.endswith('.w3d'):
-                continue
             if name_filter and name_filter not in lowered:
                 continue
 

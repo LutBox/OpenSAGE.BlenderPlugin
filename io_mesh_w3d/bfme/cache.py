@@ -33,7 +33,9 @@ from . import dependencies
 from .vendor.pyBIG.pyBIG import InDiskArchive
 
 SUPPORTED_EXTENSIONS = {'.dds', '.tga', '.jpg', '.jpeg', '.png', '.bmp'}
-CACHE_EXTENSIONS = {'.dds', '.tga', '.w3d'}
+# every tool indexes this same set: there is only one cached index, so a tool asking
+# for a narrower set would replace it with one the others cannot find textures in
+CACHE_EXTENSIONS = SUPPORTED_EXTENSIONS | {'.w3d'}
 
 BIG_CACHE_DIR = os.path.join(tempfile.gettempdir(), 'bfme_big_cache')
 # only removed by clear(), the previous implementation used it to remember which
@@ -442,7 +444,9 @@ def dependency_keys(index, key):
                 collected[name] = reference
                 pending.add(name)  # only hierarchies can reference anything further
         for name in texture_names:
-            if name == key or name in collected:
+            # a texture named like its own model ('treefir01.w3d' using 'treefir01.dds')
+            # is common and not a self reference, so unlike a hierarchy it is not skipped
+            if name in collected:
                 continue
             reference = textures.get(name)
             if reference is not None:
@@ -463,7 +467,9 @@ def stage_for_import(index, key):
     copied; otherwise the model and its dependencies are gathered in the cache
     directory, which is the only case where anything gets written.
     """
-    reference = index.get(key)
+    # only models get staged; looked up in their own bucket, since in the flat index
+    # a same-named texture can take the model's place
+    reference = getattr(index, 'models', index).get(key)
     if reference is None:
         return None
 

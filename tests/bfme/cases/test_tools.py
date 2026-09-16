@@ -203,6 +203,44 @@ class TestPreviewIndex(TestCase):
 
         self.assertIn('model', model_browser.load_preview_index())
 
+    def test_preview_rendered_by_an_older_version_is_invalid(self):
+        reference = self.loose_reference()
+        preview = self.write('model.png')
+        model_browser.update_preview_index('model', reference, preview)
+
+        # what an entry written before previews carried a version looks like
+        model_browser.load_preview_index()['model'].pop('version', None)
+
+        self.assertFalse(model_browser.is_preview_valid('model', reference, preview))
+
+
+class TestModelList(TestCase):
+    def setUp(self):
+        super().setUp()
+        self.directory = tempfile.mkdtemp(prefix='bfme-models-')
+        cache.invalidate_asset_index()
+
+    def tearDown(self):
+        cache.invalidate_asset_index()
+        shutil.rmtree(self.directory, ignore_errors=True)
+        super().tearDown()
+
+    def write(self, subdirectory, name):
+        path = os.path.join(self.directory, subdirectory, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as file:
+            file.write(b'data')
+        return os.path.dirname(path)
+
+    def test_a_model_is_listed_when_a_texture_shares_its_name(self):
+        models = self.write('w3d', 'hu_r_treb.w3d')
+        # the later search path, so the texture is what the flat index keeps
+        textures = self.write('compiledtextures', 'hu_r_treb.dds')
+
+        listed = model_browser._collect_w3d_models([], [models, textures], force_refresh=True)
+
+        self.assertEqual([('hu_r_treb.w3d', 'hu_r_treb')], listed)
+
 
 class TestTextureExtensionReplacement(TestCase):
     def setUp(self):
