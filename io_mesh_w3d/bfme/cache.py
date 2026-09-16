@@ -29,7 +29,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from . import dependencies
-from .vendor.pyBIG import InDiskArchive
+# 'vendor/pyBIG' is the pyBIG repository as a submodule, the package itself sits one level down
+from .vendor.pyBIG.pyBIG import InDiskArchive
 
 SUPPORTED_EXTENSIONS = {'.dds', '.tga', '.jpg', '.jpeg', '.png', '.bmp'}
 CACHE_EXTENSIONS = {'.dds', '.tga', '.w3d'}
