@@ -103,6 +103,28 @@ def source_origins(scene, source_id):
 
 
 ##########################################################################
+# animation actions
+##########################################################################
+
+
+def replace_action(name):
+    """A fresh, empty action with exactly this name.
+
+    bpy.data.actions.new() appends '.001', '.002', ... instead of reusing a name
+    already taken, so regenerating a build-up/destroy animation under an unchanged
+    name silently drifted to a new action every time, leaving the old one orphaned
+    (still exported, if it happened to carry a fake user) and no longer the one
+    actually assigned to the armature. Any existing action of that name is removed
+    first, so re-running the generator always leaves exactly one action with the
+    requested name, matching the in-game animation state name it has to equal.
+    """
+    existing = bpy.data.actions.get(name)
+    if existing is not None:
+        bpy.data.actions.remove(existing)
+    return bpy.data.actions.new(name=name)
+
+
+##########################################################################
 # w3d import / export
 ##########################################################################
 

@@ -179,8 +179,7 @@ class DESTROY_OT_create(Operator):
 
         if not armature.animation_data:
             armature.animation_data_create()
-        armature.animation_data.action = bpy.data.actions.new(
-            name=scene.destroy_name.strip() or 'destroy')
+        armature.animation_data.action = utils.replace_action(scene.destroy_name.strip() or 'destroy')
 
         non_split_bones = set()
         for item in scene.splitting_object_settings:
@@ -326,7 +325,9 @@ class DestroyBoneAnimSettings(PropertyGroup):
         description="End of the bone's destruction as a percentage of the total length")
 
 
-SPLIT_COUNT_BY_SIZE = ((25.0, 2), (50.0, 4), (100.0, 8), (200.0, 16))
+# each bucket's piece count is about half of what it used to be: real assets were
+# ending up with far more sub-objects than a destruction animation needs
+SPLIT_COUNT_BY_SIZE = ((25.0, 2), (50.0, 2), (100.0, 4), (200.0, 8))
 
 
 def update_destroy_settings(_self, context):
@@ -353,7 +354,7 @@ def update_destroy_settings(_self, context):
 
         largest = max(child.dimensions)
         item.split_count = next(
-            (count for limit, count in SPLIT_COUNT_BY_SIZE if largest < limit), 32)
+            (count for limit, count in SPLIT_COUNT_BY_SIZE if largest < limit), 16)
 
 
 class DESTROY_PT_panel(Panel):

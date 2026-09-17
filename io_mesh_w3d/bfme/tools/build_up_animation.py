@@ -39,7 +39,7 @@ class BUILDUP_OT_create(Operator):
 
         if not target.animation_data:
             target.animation_data_create()
-        target.animation_data.action = bpy.data.actions.new(name=scene.build_up_name.strip() or 'build_up')
+        target.animation_data.action = utils.replace_action(scene.build_up_name.strip() or 'build_up')
 
         # one dict lookup per bone instead of a linear scan through the settings
         timings = {item.name: (item.start_percent, item.end_percent) for item in scene.bone_anim_settings}

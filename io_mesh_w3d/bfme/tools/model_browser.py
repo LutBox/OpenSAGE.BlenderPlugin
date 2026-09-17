@@ -833,6 +833,8 @@ class W3D_OT_import_model(Operator):
             self.report({'ERROR'}, f"Could not read '{self.key}'. Re-scan the models.")
             return {'CANCELLED'}
 
+        objects_before = set(bpy.data.objects)
+
         try:
             # the specular fix runs inside the core import operator itself, so it
             # applies here exactly as it does for File > Import
@@ -844,6 +846,14 @@ class W3D_OT_import_model(Operator):
         if 'FINISHED' not in result:
             self.report({'ERROR'}, f'Import failed for {os.path.basename(filepath)}')
             return {'CANCELLED'}
+
+        # tags every object the import created with where it came from, so Export
+        # Settings' Auto-Detect can default the export path back to it (a source
+        # inside a .big is the cache directory it got materialised into, not a real
+        # mod folder, but it is still the closest thing there is to go back to)
+        directory = os.path.dirname(filepath)
+        for obj in set(bpy.data.objects) - objects_before:
+            obj['bfme_import_path'] = directory
 
         self.report({'INFO'}, f'Imported {os.path.basename(filepath)}')
         return {'FINISHED'}

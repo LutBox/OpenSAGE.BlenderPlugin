@@ -53,33 +53,60 @@ class BFME_OT_auto_configure_export(Operator):
 
     def execute(self, context):
         settings = context.scene.bfme_export_settings
-        obj = context.active_object
+        armature = self._find_armature(context)
+        obj = armature or context.active_object
 
-        has_animation = bool(obj and obj.animation_data and obj.animation_data.action)
+        collection_name = obj.users_collection[0].name if obj is not None and obj.users_collection else None
+        armature_name = armature.data.name if armature is not None else None
+        # only true with an armature present: an empty scene comparing two Nones
+        # would otherwise read as 'collection matches the armature'
+        same_name = armature is not None and collection_name == armature_name
+        action = armature.animation_data.action if armature is not None and armature.animation_data else None
 
-        if has_animation:
-            settings.export_name = obj.animation_data.action.name
-        elif obj is not None and obj.users_collection:
-            settings.export_name = obj.users_collection[0].name
+        if same_name and action is not None:
+            # a build-up/destroy animation of the armature's own model: keep
+            # referencing its hierarchy rather than one named after this export,
+            # or the game does not recognise the animation as belonging to it
+            settings.mode = 'HAM'
+            settings.use_existing_skeleton = True
+            settings.export_name = action.name
+        elif not same_name and action is None:
+            # a mesh set that names its own collection, bound to a skeleton that
+            # lives (or will be exported) under the armature's own name elsewhere
+            settings.mode = 'HM'
+            settings.use_existing_skeleton = armature is not None
+            settings.export_name = collection_name or armature_name or ''
+        else:
+            # the collection is the whole model (same_name, no animation), or
+            # nothing more specific applies (an animation exists but the armature
+            # is not the collection's own model) - export it as a plain static model
+            settings.mode = 'HM'
+            settings.use_existing_skeleton = False
+            settings.export_name = collection_name or armature_name or ''
 
-        settings.export_path = self._detect_path(context, obj)
+        settings.export_path = self._detect_path(obj)
         settings.file_format = 'W3D'
-        settings.mode = 'HAM' if has_animation else 'HM'
-        settings.use_existing_skeleton = has_animation
         settings.force_vertex_materials = False
 
         self.report({'INFO'}, 'Export settings auto-detected')
         return {'FINISHED'}
 
     @staticmethod
-    def _detect_path(context, obj):
-        for source in (context.scene.get('bfme_last_import_path'),
-                       obj.get('bfme_import_path') if obj is not None else None):
-            if source and os.path.isdir(source):
-                return source
+    def _find_armature(context):
+        # matches the rest of the BfMe tools (e.g. reparent_bone_meshes below,
+        # hierarchy export): exactly one visible armature is assumed per scene
+        return next((obj for obj in context.scene.objects
+                    if obj.type == 'ARMATURE' and not obj.hide_viewport), None)
 
+    @staticmethod
+    def _detect_path(obj):
         if bpy.data.is_saved:
             return os.path.dirname(bpy.data.filepath)
+
+        source = obj.get('bfme_import_path') if obj is not None else None
+        if source and os.path.isdir(source):
+            return source
+
         return ''
 
 

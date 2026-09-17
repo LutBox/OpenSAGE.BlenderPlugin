@@ -2,6 +2,36 @@
 
 ## v0.9.0
 
+* Bugfix: a build-up/destroy animation exported as 'Hierarchical Animated Model' under its
+  own file name (e.g. a 'hb_w_walls_a.w3d' generated from 'hb_w_stalls') exported without
+  errors but never played in-game. Not an encoding issue: HAM export always renamed the
+  embedded hierarchy to the output file's own name, so 'HB_W_STALLS' became 'hb_w_walls_a'
+  inside the file, and the game no longer recognised it as an animation of the original
+  building. 'Use Existing Skeleton' now also applies to HAM mode - it still embeds the
+  hierarchy, HAM needs its own geometry either way, but keeps the original model's name
+  instead of renaming it. Export Settings' Auto-Detect now enables it whenever a build-up
+  or destroy animation is being exported
+* Bugfix: clicking 'Create Build-up Animation' or 'Create Destroy Animation' again renamed
+  the action to 'name.001', 'name.002', ... instead of reusing the configured name, since
+  a new action was always created rather than replacing one of the same name already there.
+  Both now remove an existing action of that name first, so repeated clicks always leave
+  exactly the one requested name, matching the in-game animation state name it has to equal
+* Export Settings' 'Auto-Detect Settings' no longer looks at whichever object happens to be
+  active, which on a multi-object model depended on what was last clicked and could enable
+  or skip 'Use Existing Skeleton' apparently at random. It looks at the scene's armature
+  directly instead (the same one every other BfMe tool assumes), and now covers four cases
+  by comparing the armature's collection to its own name and checking for an animation:
+  matching with no animation exports the whole model (Hierarchical Model); matching with an
+  animation exports just that (Hierarchical Animated Model, keeping the base model's
+  hierarchy, see above); a differing collection with no animation assumes a mesh-only part
+  of a model exported elsewhere (Hierarchical Model, Use Existing Skeleton); anything else
+  falls back to a plain model export. The detected path now also prefers the current
+  .blend's own save location over where a model was imported from, and importing a model
+  through the W3D Model Browser now actually records that path for the fallback to use -
+  it was previously never written anywhere
+* the automatic piece count in Destroy Animation's 'Splitting Objects' list is about half of
+  what it used to compute: real assets were ending up fractured into far more sub-objects
+  than a destruction animation needs
 * the W3D Model Browser lists a model once per asset source that ships it, instead of only
   the one that won overall. The list is grouped under a header per source: each asset search
   path is a source of its own, named after its mod folder ('Edain-Mod', 'aotr', ...), and the

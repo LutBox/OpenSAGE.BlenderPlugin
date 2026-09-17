@@ -4,6 +4,7 @@
 import os
 import shutil
 import tempfile
+from unittest.mock import patch
 
 import bpy
 import numpy as np
@@ -11,10 +12,113 @@ from bpy.props import CollectionProperty
 from mathutils import Vector
 
 from io_mesh_w3d.bfme import cache, utils
-from io_mesh_w3d.bfme.tools import existing_animations, export_settings, model_browser, w3d_tools
+from io_mesh_w3d.bfme.tools import destroy_animation, existing_animations, export_settings, model_browser, w3d_tools
 from io_mesh_w3d.common.utils.helpers import iter_action_fcurves
 from tests.bfme.cases.test_cache import write_big_archive
 from tests.utils import TestCase
+
+
+class TestReplaceAction(TestCase):
+    def test_creates_a_fresh_action_when_none_exists(self):
+        action = utils.replace_action('build_up')
+
+        self.assertEqual('build_up', action.name)
+
+    def test_reusing_a_name_does_not_suffix_it(self):
+        first = utils.replace_action('build_up')
+
+        second = utils.replace_action('build_up')
+
+        self.assertEqual('build_up', second.name)
+        self.assertNotEqual(first, second)
+
+    def test_the_old_action_of_that_name_is_removed(self):
+        first = utils.replace_action('build_up')
+        first_name = first.name
+
+        utils.replace_action('build_up')
+
+        self.assertNotIn(first_name, [a.name for a in bpy.data.actions if a == first])
+        self.assertEqual(1, len([a for a in bpy.data.actions if a.name == 'build_up']))
+
+    def test_does_not_touch_an_action_of_a_different_name(self):
+        other = bpy.data.actions.new('destroy')
+
+        utils.replace_action('build_up')
+
+        self.assertIn(other, list(bpy.data.actions))
+
+
+class TestDestroySplitCountEstimate(TestCase):
+    """The automatic piece count used to leave real assets fractured into far more
+    sub-objects than a destruction animation needs; each size bucket now computes
+    about half of what it used to.
+    """
+
+    def child_of_size(self, armature, size):
+        mesh = bpy.data.meshes.new('piece')
+        mesh.from_pydata([(0, 0, 0), (size, 0, 0), (0, size, 0), (0, 0, size)], [], [(0, 1, 2), (0, 1, 3)])
+        mesh.update()
+        obj = bpy.data.objects.new('piece', mesh)
+        bpy.context.scene.collection.objects.link(obj)
+        obj.parent = armature
+        return obj
+
+    def test_split_counts_by_size_bucket(self):
+        armature_data = bpy.data.armatures.new('rig')
+        armature = bpy.data.objects.new('rig', armature_data)
+        bpy.context.scene.collection.objects.link(armature)
+
+        for size, expected in ((10, 2), (40, 2), (80, 4), (150, 8), (500, 16)):
+            for obj in list(armature.children):
+                bpy.data.objects.remove(obj, do_unlink=True)
+            self.child_of_size(armature, size)
+
+            bpy.context.scene.destroy_target = armature
+            destroy_animation.update_destroy_settings(None, bpy.context)
+
+            item = bpy.context.scene.splitting_object_settings[0]
+            self.assertEqual(expected, item.split_count, f'size {size}')
+
+
+class TestRepeatedAnimationGeneration(TestCase):
+    """Create Build-up/Destroy Animation used to drift to 'name.001', 'name.002', ...
+    on every repeated click instead of keeping the exact configured name, since
+    bpy.data.actions.new() suffixes rather than replacing a name already taken.
+    """
+
+    def create_rig(self, name='rig'):
+        armature_data = bpy.data.armatures.new(name)
+        rig = bpy.data.objects.new(name, armature_data)
+        bpy.context.scene.collection.objects.link(rig)
+        bpy.context.view_layer.objects.active = rig
+
+        bpy.ops.object.mode_set(mode='EDIT')
+        bone = armature_data.edit_bones.new('bone1')
+        bone.head = (0, 0, 0)
+        bone.tail = (0, 1, 0)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        return rig
+
+    def test_build_up_animation_keeps_the_exact_name_when_run_twice(self):
+        scene = bpy.context.scene
+        scene.build_up_target = self.create_rig()
+        scene.build_up_name = 'hb_w_walls_a'
+
+        bpy.ops.bfme.build_up_animation()
+        bpy.ops.bfme.build_up_animation()
+
+        self.assertEqual(['hb_w_walls_a'], sorted(a.name for a in bpy.data.actions))
+
+    def test_destroy_animation_keeps_the_exact_name_when_run_twice(self):
+        scene = bpy.context.scene
+        scene.destroy_target = self.create_rig()
+        scene.destroy_name = 'hb_w_walls_d'
+
+        bpy.ops.bfme.destroy_animation()
+        bpy.ops.bfme.destroy_animation()
+
+        self.assertEqual(['hb_w_walls_d'], sorted(a.name for a in bpy.data.actions))
 
 
 class TestExistingAnimationsActionHandling(TestCase):
@@ -269,6 +373,27 @@ class TestModelList(TestCase):
 
         self.assertEqual([('BfMe 2', '', 'bfme2', True), ('Model.w3d', 'model', 'bfme2', False)], rows)
 
+    def test_importing_a_model_tags_the_objects_it_created_with_where_it_came_from(self):
+        """Export Settings' Auto-Detect falls back to this path when the scene has
+        never been saved, but nothing ever wrote it until now.
+        """
+        directory = self.write('w3d', 'model.w3d')
+        sources = [(directory, 'Mod', [directory])]
+        model_browser._collect_w3d_models([], [directory], sources, force_refresh=True)
+
+        def fake_import(_filepath):
+            new_object = bpy.data.objects.new('imported_piece', bpy.data.meshes.new('imported_piece'))
+            bpy.context.scene.collection.objects.link(new_object)
+            return {'FINISHED'}
+
+        with patch.object(model_browser.utils, 'import_w3d', side_effect=fake_import):
+            result = bpy.ops.w3d.import_model(key='model', source=directory)
+
+        self.assertEqual({'FINISHED'}, result)
+        # re-fetched: bpy.ops calls can invalidate Python references held from before them
+        created = bpy.data.objects['imported_piece']
+        self.assertEqual(os.path.join(self.directory, 'w3d'), created.get('bfme_import_path'))
+
 
 class TestModelListStorage(TestCase):
     def test_the_model_list_is_not_kept_on_the_scene(self):
@@ -303,6 +428,99 @@ class TestAssetSources(TestCase):
 
         self.assertEqual('Edain-Mod', utils.source_label(os.path.join(root, 'Edain-Mod', '_mod', 'art') + os.sep))
         self.assertEqual('aotr', utils.source_label(os.path.join(root, 'AOTR8.0', 'aotr', 'art')))
+
+
+class TestAutoConfigureExport(TestCase):
+    def create_armature(self, name, collection=None):
+        armature_data = bpy.data.armatures.new(name)
+        rig = bpy.data.objects.new(name, armature_data)
+        (collection or bpy.context.scene.collection).objects.link(rig)
+        bpy.context.view_layer.objects.active = rig
+        return rig
+
+    def settings(self):
+        return bpy.context.scene.bfme_export_settings
+
+    def test_collection_matches_armature_and_no_animation_exports_as_hierarchical_model(self):
+        collection = bpy.data.collections.new('HB_W_STALLS')
+        bpy.context.scene.collection.children.link(collection)
+        self.create_armature('HB_W_STALLS', collection)
+
+        bpy.ops.bfme.auto_configure_export()
+
+        settings = self.settings()
+        self.assertEqual('HM', settings.mode)
+        self.assertFalse(settings.use_existing_skeleton)
+        self.assertEqual('HB_W_STALLS', settings.export_name)
+
+    def test_collection_differs_from_armature_and_no_animation_uses_existing_skeleton(self):
+        collection = bpy.data.collections.new('HB_W_STALLS_props')
+        bpy.context.scene.collection.children.link(collection)
+        self.create_armature('HB_W_STALLS', collection)
+
+        bpy.ops.bfme.auto_configure_export()
+
+        settings = self.settings()
+        self.assertEqual('HM', settings.mode)
+        self.assertTrue(settings.use_existing_skeleton)
+        self.assertEqual('HB_W_STALLS_props', settings.export_name)
+
+    def test_collection_matches_armature_and_has_animation_exports_as_ham_named_after_it(self):
+        collection = bpy.data.collections.new('HB_W_STALLS')
+        bpy.context.scene.collection.children.link(collection)
+        rig = self.create_armature('HB_W_STALLS', collection)
+        rig.animation_data_create()
+        rig.animation_data.action = bpy.data.actions.new('hb_w_walls_a')
+
+        bpy.ops.bfme.auto_configure_export()
+
+        settings = self.settings()
+        self.assertEqual('HAM', settings.mode)
+        # what actually fixes the animation not showing in-game: the exported
+        # hierarchy must stay 'HB_W_STALLS', not the animation's own name
+        self.assertTrue(settings.use_existing_skeleton)
+        self.assertEqual('hb_w_walls_a', settings.export_name)
+
+    def test_collection_differs_from_armature_but_has_animation_falls_back_to_hierarchical_model(self):
+        collection = bpy.data.collections.new('HB_W_STALLS_props')
+        bpy.context.scene.collection.children.link(collection)
+        rig = self.create_armature('HB_W_STALLS', collection)
+        rig.animation_data_create()
+        rig.animation_data.action = bpy.data.actions.new('hb_w_walls_a')
+
+        bpy.ops.bfme.auto_configure_export()
+
+        settings = self.settings()
+        self.assertEqual('HM', settings.mode)
+        self.assertFalse(settings.use_existing_skeleton)
+        self.assertEqual('HB_W_STALLS_props', settings.export_name)
+
+    def test_path_prefers_the_saved_blend_files_directory(self):
+        rig = self.create_armature('HB_W_STALLS')
+        # a real, existing decoy the saved location must still win over
+        decoy = os.path.join(self.outpath(), 'decoy')
+        os.makedirs(decoy, exist_ok=True)
+        rig['bfme_import_path'] = decoy
+        bpy.ops.wm.save_as_mainfile(filepath=os.path.join(self.outpath(), 'scene.blend'))
+
+        bpy.ops.bfme.auto_configure_export()
+
+        self.assertEqual(os.path.normpath(self.outpath()), os.path.normpath(self.settings().export_path))
+
+    def test_path_falls_back_to_where_the_model_was_imported_from(self):
+        rig = self.create_armature('HB_W_STALLS')
+        rig['bfme_import_path'] = self.outpath().rstrip(os.sep)
+
+        bpy.ops.bfme.auto_configure_export()
+
+        self.assertEqual(self.outpath().rstrip(os.sep), self.settings().export_path)
+
+    def test_path_is_empty_without_a_saved_file_or_a_known_import_path(self):
+        self.create_armature('HB_W_STALLS')
+
+        bpy.ops.bfme.auto_configure_export()
+
+        self.assertEqual('', self.settings().export_path)
 
 
 class TestTextureExtensionReplacement(TestCase):
