@@ -14,7 +14,7 @@ from mathutils import Vector
 from io_mesh_w3d.bfme import cache, utils
 from io_mesh_w3d.bfme.tools import destroy_animation, existing_animations, export_settings, model_browser, w3d_tools
 from io_mesh_w3d.common.utils.helpers import iter_action_fcurves
-from tests.bfme.cases.test_cache import write_big_archive
+from tests.bfme.cases.test_cache import w3d_model, write_big_archive
 from tests.utils import TestCase
 
 
@@ -394,6 +394,36 @@ class TestModelList(TestCase):
         created = bpy.data.objects['imported_piece']
         self.assertEqual(os.path.join(self.directory, 'w3d'), created.get('bfme_import_path'))
 
+    def test_recorded_import_path_is_the_models_own_folder_even_when_staged(self):
+        """The common real layout: a mod's models and its textures sit in separate
+        folders (e.g. 'art/w3d/hb' and 'art/compiledtextures/hb'), so a model naming
+        a texture from the other folder cannot be imported in place and gets staged
+        into the cache directory instead - and 'bfme_import_path' used to be read
+        back off *that* staged location instead of the model's real source folder.
+        """
+        models_dir = os.path.join(self.directory, 'w3d')
+        textures_dir = os.path.join(self.directory, 'compiledtextures')
+        os.makedirs(models_dir)
+        os.makedirs(textures_dir)
+        with open(os.path.join(models_dir, 'model.w3d'), 'wb') as file:
+            file.write(w3d_model(textures=['skin.dds']))
+        with open(os.path.join(textures_dir, 'skin.dds'), 'wb') as file:
+            file.write(b'SKIN')
+
+        sources = [(models_dir, 'Mod', [models_dir, textures_dir])]
+        model_browser._collect_w3d_models([], [models_dir, textures_dir], sources, force_refresh=True)
+
+        def fake_import(_filepath):
+            new_object = bpy.data.objects.new('imported_piece', bpy.data.meshes.new('imported_piece'))
+            bpy.context.scene.collection.objects.link(new_object)
+            return {'FINISHED'}
+
+        with patch.object(model_browser.utils, 'import_w3d', side_effect=fake_import):
+            bpy.ops.w3d.import_model(key='model', source=models_dir)
+
+        created = bpy.data.objects['imported_piece']
+        self.assertEqual(models_dir, created.get('bfme_import_path'))
+
 
 class TestModelListStorage(TestCase):
     def test_the_model_list_is_not_kept_on_the_scene(self):
@@ -476,9 +506,10 @@ class TestAutoConfigureExport(TestCase):
 
         settings = self.settings()
         self.assertEqual('HAM', settings.mode)
-        # what actually fixes the animation not showing in-game: the exported
-        # hierarchy must stay 'HB_W_STALLS', not the animation's own name
-        self.assertTrue(settings.use_existing_skeleton)
+        # left unchecked as specified, even though the exporter then renames the
+        # embedded hierarchy to 'hb_w_walls_a' and the game no longer recognises
+        # it as HB_W_STALLS's own animation - a deliberate, confirmed trade-off
+        self.assertFalse(settings.use_existing_skeleton)
         self.assertEqual('hb_w_walls_a', settings.export_name)
 
     def test_collection_differs_from_armature_but_has_animation_falls_back_to_hierarchical_model(self):

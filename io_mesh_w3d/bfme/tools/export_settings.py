@@ -64,11 +64,14 @@ class BFME_OT_auto_configure_export(Operator):
         action = armature.animation_data.action if armature is not None and armature.animation_data else None
 
         if same_name and action is not None:
-            # a build-up/destroy animation of the armature's own model: keep
-            # referencing its hierarchy rather than one named after this export,
-            # or the game does not recognise the animation as belonging to it
+            # a build-up/destroy animation of the armature's own model. Left
+            # unchecked as specified: note that the exporter still renames the
+            # embedded hierarchy to this export's own name whenever this box is
+            # off, which the game then no longer recognises as the base model's
+            # skeleton - check 'Use Existing Skeleton' by hand if the animation
+            # needs to bind to the model this armature already is in-game
             settings.mode = 'HAM'
-            settings.use_existing_skeleton = True
+            settings.use_existing_skeleton = False
             settings.export_name = action.name
         elif not same_name and action is None:
             # a mesh set that names its own collection, bound to a skeleton that

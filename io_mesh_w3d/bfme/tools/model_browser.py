@@ -827,8 +827,10 @@ class W3D_OT_import_model(Operator):
     def execute(self, context):
         # the model and its skeleton and textures get written out at this point,
         # rather than the whole archive; taken from the source it is listed under
+        index = cache.cached_asset_index()
         origins = utils.source_origins(context.scene, self.source)
-        filepath = cache.stage_for_import(cache.cached_asset_index(), self.key, origins)
+        reference = cache.find_model(index, self.key, origins)
+        filepath = cache.stage_for_import(index, self.key, origins)
         if filepath is None:
             self.report({'ERROR'}, f"Could not read '{self.key}'. Re-scan the models.")
             return {'CANCELLED'}
@@ -848,10 +850,14 @@ class W3D_OT_import_model(Operator):
             return {'CANCELLED'}
 
         # tags every object the import created with where it came from, so Export
-        # Settings' Auto-Detect can default the export path back to it (a source
-        # inside a .big is the cache directory it got materialised into, not a real
-        # mod folder, but it is still the closest thing there is to go back to)
-        directory = os.path.dirname(filepath)
+        # Settings' Auto-Detect can default the export path back to it. Taken from
+        # the reference itself, not from 'filepath': a loose model whose textures
+        # live in another folder (the common case - a mod's art and compiledtextures
+        # directories are usually separate) gets staged into the cache directory so
+        # the importer finds everything next to it, and 'filepath' would then point
+        # there instead of at the mod's own source folder. A .big-archived model has
+        # no real folder of its own; the archive's is the closest thing there is
+        directory = os.path.dirname(reference[1]) if reference is not None else os.path.dirname(filepath)
         for obj in set(bpy.data.objects) - objects_before:
             obj['bfme_import_path'] = directory
 

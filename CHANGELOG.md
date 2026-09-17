@@ -19,8 +19,8 @@
   inside the file, and the game no longer recognised it as an animation of the original
   building. 'Use Existing Skeleton' now also applies to HAM mode - it still embeds the
   hierarchy, HAM needs its own geometry either way, but keeps the original model's name
-  instead of renaming it. Export Settings' Auto-Detect now enables it whenever a build-up
-  or destroy animation is being exported
+  instead of renaming it. Auto-Detect does not enable it on its own (see below), so exporting
+  a build-up/destroy animation this way still needs it checked by hand
 * Bugfix: clicking 'Create Build-up Animation' or 'Create Destroy Animation' again renamed
   the action to 'name.001', 'name.002', ... instead of reusing the configured name, since
   a new action was always created rather than replacing one of the same name already there.
@@ -32,13 +32,18 @@
   directly instead (the same one every other BfMe tool assumes), and now covers four cases
   by comparing the armature's collection to its own name and checking for an animation:
   matching with no animation exports the whole model (Hierarchical Model); matching with an
-  animation exports just that (Hierarchical Animated Model, keeping the base model's
-  hierarchy, see above); a differing collection with no animation assumes a mesh-only part
-  of a model exported elsewhere (Hierarchical Model, Use Existing Skeleton); anything else
-  falls back to a plain model export. The detected path now also prefers the current
-  .blend's own save location over where a model was imported from, and importing a model
-  through the W3D Model Browser now actually records that path for the fallback to use -
-  it was previously never written anywhere
+  animation exports just that (Hierarchical Animated Model, named after the animation); a
+  differing collection with no animation assumes a mesh-only part of a model exported
+  elsewhere (Hierarchical Model, Use Existing Skeleton); anything else falls back to a plain
+  model export. Note the animation case leaves 'Use Existing Skeleton' unchecked, so as
+  exported this way the embedded hierarchy is renamed to the animation's own name rather than
+  kept as the base model's (see the HAM bugfix above) - check the box by hand when the
+  animation needs to bind to the model this armature already is in-game. The detected path
+  now also prefers the current .blend's own save location over where a model was imported
+  from, and importing a model through the W3D Model Browser now actually records that path
+  for the fallback to use - it was previously never written anywhere, and even once it was,
+  it pointed at the temporary cache directory a model got staged into (to sit its textures
+  next to it for the import) rather than its real, original mod folder
 * the automatic piece count in Destroy Animation's 'Splitting Objects' list is about half of
   what it used to compute: real assets were ending up fractured into far more sub-objects
   than a destruction animation needs
