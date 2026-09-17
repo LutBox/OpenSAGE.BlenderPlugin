@@ -36,16 +36,17 @@ def read_fixed_string(io_stream):
 
 
 def write_fixed_string(string, io_stream):
-    # truncate the string to 16
-    nullbytes = STRING_LENGTH - len(string)
-    if nullbytes < 0:
+    # truncated/padded to exactly 16 bytes, not 16 characters: a character outside
+    # ASCII (an umlaut, say) is 2-4 bytes in UTF-8, so len(string) on the raw text
+    # undercounts how many bytes it actually takes and pads too few null bytes,
+    # shifting every chunk written after this field by the difference - silent
+    # corruption the writer itself gives no sign of, only whatever reads the file next
+    encoded = bytes(string, 'UTF-8')[0:STRING_LENGTH]
+    if len(bytes(string, 'UTF-8')) > STRING_LENGTH:
         print('Warning: Fixed string is too long!')
 
-    io_stream.write(bytes(string, 'UTF-8')[0:STRING_LENGTH])
-    i = 0
-    while i < nullbytes:
-        io_stream.write(struct.pack('B', 0b0))
-        i += 1
+    io_stream.write(encoded)
+    io_stream.write(bytes(STRING_LENGTH - len(encoded)))
 
 
 def read_long_fixed_string(io_stream):
@@ -53,16 +54,13 @@ def read_long_fixed_string(io_stream):
 
 
 def write_long_fixed_string(string, io_stream):
-    # truncate the string to 32
-    nullbytes = LARGE_STRING_LENGTH - len(string)
-    if nullbytes < 0:
+    # see write_fixed_string() for why this counts encoded bytes, not characters
+    encoded = bytes(string, 'UTF-8')[0:LARGE_STRING_LENGTH]
+    if len(bytes(string, 'UTF-8')) > LARGE_STRING_LENGTH:
         print('Warning: Fixed string was too long!')
 
-    io_stream.write(bytes(string, 'UTF-8')[0:LARGE_STRING_LENGTH])
-    i = 0
-    while i < nullbytes:
-        io_stream.write(struct.pack('B', 0b0))
-        i += 1
+    io_stream.write(encoded)
+    io_stream.write(bytes(LARGE_STRING_LENGTH - len(encoded)))
 
 
 def read_long(io_stream):

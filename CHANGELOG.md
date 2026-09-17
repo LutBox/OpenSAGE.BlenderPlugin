@@ -2,6 +2,16 @@
 
 ## v0.9.0
 
+* Bugfix: exporting a mesh, texture name, vertex material or dazzle whose name or 'User Text'
+  (Object Data Properties > W3D Properties) contained a character outside ASCII - an umlaut,
+  an accented letter, anything needing more than one byte in UTF-8 - silently corrupted the
+  rest of the file. Every such string is preceded by a byte count so a reader knows how far
+  it runs; that count was computed from the number of *characters* while the string itself is
+  written as UTF-8 *bytes*, which take more space than characters for exactly this kind of
+  text. The declared count came out too small, so the chunk after the string was read (or
+  read by the game) starting a few bytes into what was still string content - garbage from
+  there on, sometimes readable enough that the file loaded but was missing whatever came
+  after, sometimes not. Every writer that counts these strings now counts encoded bytes
 * Bugfix: a build-up/destroy animation exported as 'Hierarchical Animated Model' under its
   own file name (e.g. a 'hb_w_walls_a.w3d' generated from 'hb_w_stalls') exported without
   errors but never played in-game. Not an encoding issue: HAM export always renamed the
