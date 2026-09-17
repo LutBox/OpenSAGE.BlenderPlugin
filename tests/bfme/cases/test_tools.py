@@ -7,6 +7,7 @@ import tempfile
 
 import bpy
 import numpy as np
+from bpy.props import CollectionProperty
 from mathutils import Vector
 
 from io_mesh_w3d.bfme import cache, utils
@@ -267,6 +268,33 @@ class TestModelList(TestCase):
         rows = model_browser._collect_w3d_models([patch, base], [], sources, force_refresh=True)
 
         self.assertEqual([('BfMe 2', '', 'bfme2', True), ('Model.w3d', 'model', 'bfme2', False)], rows)
+
+
+class TestModelListStorage(TestCase):
+    def test_the_model_list_is_not_kept_on_the_scene(self):
+        """Blender finds the path of a property on a scene's collection item, which the
+        UI does on every edit of it, by searching the scene's custom data. With the
+        model list kept on the scene that took seconds on a full install, and every
+        edit in e.g. the build-up animation's per-bone timings waited for it.
+        """
+        for name in model_browser.LIST_PROPERTIES:
+            self.assertFalse(hasattr(bpy.types.Scene, name))
+            self.assertTrue(hasattr(bpy.types.WindowManager, name))
+
+    def test_a_model_list_saved_on_the_scene_by_an_earlier_version_is_dropped(self):
+        scene = bpy.context.scene
+        # stored the way an earlier version did, then no longer registered on the scene
+        bpy.types.Scene.w3d_models = CollectionProperty(type=model_browser.W3DModelItem)
+        model_browser._add_rows(scene.w3d_models, [('model.w3d', 'model', 'source', False)])
+        del bpy.types.Scene.w3d_models
+
+        model_browser.drop_scene_model_list()
+
+        bpy.types.Scene.w3d_models = CollectionProperty(type=model_browser.W3DModelItem)
+        try:
+            self.assertFalse(scene.is_property_set('w3d_models'))
+        finally:
+            del bpy.types.Scene.w3d_models
 
 
 class TestAssetSources(TestCase):

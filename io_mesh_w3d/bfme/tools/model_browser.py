@@ -137,7 +137,7 @@ class W3DModelItem(PropertyGroup):
     is_header: BoolProperty(name='Is Header', default=False)
 
 
-# bumped whenever scene.w3d_models is mutated, so the UIList's cached sort/filter
+# bumped whenever the model list is mutated, so the UIList's cached sort/filter
 # result is thrown away exactly when it stops being valid
 _list_generation = 0
 _filter_cache = None
@@ -300,7 +300,7 @@ class W3D_OT_scan_models(Operator):
 
     def execute(self, context):
         scene = context.scene
-        scene.w3d_models.clear()
+        context.window_manager.w3d_models.clear()
         invalidate_list_cache()
 
         # drop the startup scan if it is still filling the list, so it does not
@@ -347,7 +347,7 @@ class W3D_OT_scan_models(Operator):
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
 
-        models = context.scene.w3d_models
+        models = context.window_manager.w3d_models
 
         # add in batches so the UI stays responsive, walking an index instead of
         # re-slicing the list, which would copy the remainder on every timer tick
@@ -377,7 +377,7 @@ class W3D_OT_scan_models(Operator):
         count = model_count(models)
         if count:
             # the first row is a source's header, select the model below it
-            context.scene.w3d_active_model_index = 1
+            context.window_manager.w3d_active_model_index = 1
             self.report({'INFO'}, f'Found {count} .w3d models')
         else:
             self.report({'WARNING'}, 'No .w3d models found. Make sure BfMe assets are selected.')
@@ -452,7 +452,7 @@ def _tag_redraw():
                     region.tag_redraw()
 
 
-def _finish_startup_scan(scene, items):
+def _finish_startup_scan(window_manager, items):
     """Restore the previous selection once the list has been filled."""
     global _startup_pending, _startup_cursor, _startup_active_key, _startup_scan_done
 
@@ -464,12 +464,12 @@ def _finish_startup_scan(scene, items):
         # a name alone is ambiguous now that several sources can list it
         for index, item in enumerate(items):
             if (item.source, item.key) == _startup_active_key:
-                if index != scene.w3d_active_model_index:
-                    scene.w3d_active_model_index = index
+                if index != window_manager.w3d_active_model_index:
+                    window_manager.w3d_active_model_index = index
                 break
         else:
             # the model it pointed at is gone, select the first one below its header
-            scene.w3d_active_model_index = 1 if len(items) > 1 else 0
+            window_manager.w3d_active_model_index = 1 if len(items) > 1 else 0
     _startup_active_key = None
 
     _tag_redraw()
@@ -482,12 +482,12 @@ def _apply_startup_batch():
     """
     global _startup_pending, _startup_cursor
 
-    scene = bpy.context.scene
-    if scene is None or not hasattr(scene, 'w3d_models'):
+    window_manager = bpy.context.window_manager
+    if window_manager is None or not hasattr(window_manager, 'w3d_models'):
         _startup_pending = None
         return None
 
-    items = scene.w3d_models
+    items = window_manager.w3d_models
     end = min(_startup_cursor + STARTUP_SCAN_BATCH_SIZE, len(_startup_pending))
     _add_rows(items, _startup_pending[_startup_cursor:end])
     _startup_cursor = end
@@ -498,7 +498,7 @@ def _apply_startup_batch():
         # and a redraw per batch is exactly the churn this is meant to avoid
         return STARTUP_SCAN_BATCH_INTERVAL
 
-    return _finish_startup_scan(scene, items)
+    return _finish_startup_scan(window_manager, items)
 
 
 def _startup_scan_tick():
@@ -524,18 +524,18 @@ def _startup_scan_tick():
         _startup_thread = None
         models, _startup_result = _startup_result, None
 
-        scene = bpy.context.scene
-        if not models or scene is None or not hasattr(scene, 'w3d_models'):
+        window_manager = bpy.context.window_manager
+        if not models or window_manager is None or not hasattr(window_manager, 'w3d_models'):
             _startup_scan_done = True
             return None
 
-        items = scene.w3d_models
-        active = scene.w3d_active_model_index
+        items = window_manager.w3d_models
+        active = window_manager.w3d_active_model_index
         _startup_active_key = (items[active].source, items[active].key) \
             if 0 <= active < len(items) else None
 
         # the scan is authoritative, so the list is refilled from it rather than
-        # diffed against whatever the opened .blend happened to have saved
+        # diffed against whatever a scan by the button left in it
         items.clear()
         invalidate_list_cache()
 
@@ -544,9 +544,11 @@ def _startup_scan_tick():
         return STARTUP_SCAN_BATCH_INTERVAL
 
     scene = bpy.context.scene
-    if scene is None or not hasattr(scene, 'w3d_models'):
+    if scene is None or not hasattr(bpy.context.window_manager, 'w3d_models'):
         _startup_scan_done = True
         return None
+
+    drop_scene_model_list()
 
     big_paths = utils.selected_big_paths(scene)
     search_paths = utils.search_paths(scene)
@@ -611,15 +613,13 @@ class W3D_OT_generate_preview(Operator):
 
     def execute(self, context):
         scene = context.scene
+        models = context.window_manager.w3d_models
 
-        if not len(scene.w3d_models):
+        index = context.window_manager.w3d_active_model_index
+        if not 0 <= index < len(models):
             return {'CANCELLED'}
 
-        index = scene.w3d_active_model_index
-        if not 0 <= index < len(scene.w3d_models):
-            return {'CANCELLED'}
-
-        item = scene.w3d_models[index]
+        item = models[index]
         if item.is_header:
             return {'CANCELLED'}
 
@@ -860,11 +860,12 @@ class W3D_IMPORTER_PT_panel(Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        window_manager = context.window_manager
 
         layout.label(text='Browse .w3d models from BIG archives', icon='INFO')
         layout.operator('w3d.scan_models', icon='FILE_REFRESH')
 
-        if not len(scene.w3d_models):
+        if not len(window_manager.w3d_models):
             layout.separator()
             box = layout.box()
             box.label(text='No models found in cache.', icon='ERROR')
@@ -874,10 +875,11 @@ class W3D_IMPORTER_PT_panel(Panel):
             return
 
         layout.separator()
-        layout.label(text=f'Total: {model_count(scene.w3d_models)} models', icon='MESH_DATA')
+        layout.label(text=f'Total: {model_count(window_manager.w3d_models)} models', icon='MESH_DATA')
 
         layout.row().template_list(
-            'W3D_UL_model_list', '', scene, 'w3d_models', scene, 'w3d_active_model_index', rows=10)
+            'W3D_UL_model_list', '', window_manager, 'w3d_models',
+            window_manager, 'w3d_active_model_index', rows=10)
 
         layout.separator()
         box = layout.box()
@@ -904,17 +906,53 @@ CLASSES = (
     W3D_OT_import_model,
     W3D_IMPORTER_PT_panel)
 
+# The model list holds a full install's worth of rows and is rebuilt every session, so
+# it lives on the window manager, not the scene. To find the path of a property on a
+# scene's collection item, which the UI does on every edit of such a property in any
+# panel, Blender walks the scene's registered collections - and with the list among
+# them that took seconds, growing with the square of the list's size. On the scene it
+# also added around 25 MB to every saved .blend.
+LIST_PROPERTIES = ('w3d_models', 'w3d_active_model_index')
+
+
+@bpy.app.handlers.persistent
+def drop_scene_model_list(_dummy=None):
+    """Remove the model list earlier versions kept on the scene, see LIST_PROPERTIES.
+
+    No longer registered there, it does not slow anything down, but a .blend saved
+    back then still carries it. Only a registered property can be unset, so both are
+    registered on the scene for the moment.
+    """
+    scenes = getattr(bpy.data, 'scenes', None)
+    if scenes is None:
+        return
+
+    bpy.types.Scene.w3d_models = CollectionProperty(type=W3DModelItem)
+    bpy.types.Scene.w3d_active_model_index = IntProperty()
+    try:
+        for scene in scenes:
+            for name in LIST_PROPERTIES:
+                scene.property_unset(name)
+    finally:
+        del bpy.types.Scene.w3d_models
+        del bpy.types.Scene.w3d_active_model_index
+
 
 def register():
     for class_ in CLASSES:
         bpy.utils.register_class(class_)
 
-    scene = bpy.types.Scene
-    scene.w3d_models = CollectionProperty(type=W3DModelItem)
-    scene.w3d_active_model_index = IntProperty(
+    window_manager = bpy.types.WindowManager
+    window_manager.w3d_models = CollectionProperty(type=W3DModelItem)
+    window_manager.w3d_active_model_index = IntProperty(
         name='Active Model Index', default=0, update=on_model_selection_changed)
+
+    scene = bpy.types.Scene
     scene.w3d_preview_image = StringProperty(default='')
     scene.w3d_preview_generating = BoolProperty(default=False)
+
+    if drop_scene_model_list not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(drop_scene_model_list)
 
     # persistent so opening a .blend during the delay does not cancel the one scan
     # this session gets; the callback unregisters itself once the list is filled
@@ -940,7 +978,13 @@ def unregister():
     if bpy.app.timers.is_registered(_generate_preview_deferred):
         bpy.app.timers.unregister(_generate_preview_deferred)
 
-    for name in ('w3d_models', 'w3d_active_model_index', 'w3d_preview_image', 'w3d_preview_generating'):
+    if drop_scene_model_list in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(drop_scene_model_list)
+
+    for name in LIST_PROPERTIES:
+        if hasattr(bpy.types.WindowManager, name):
+            delattr(bpy.types.WindowManager, name)
+    for name in ('w3d_preview_image', 'w3d_preview_generating'):
         if hasattr(bpy.types.Scene, name):
             delattr(bpy.types.Scene, name)
 

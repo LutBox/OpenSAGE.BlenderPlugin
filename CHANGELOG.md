@@ -30,18 +30,15 @@
     .jpg/.png/.bmp textures a model may use
   * previews rendered before this fix are rendered again once, since they were kept for as
     long as the model itself did not change
-* Bugfix: checking/unchecking a piece (or adjusting its piece count) in Destroy Animation's
-  'Splitting Objects' list made Blender's UI freeze for several seconds on every click. This
-  turned out to be a Blender engine issue, not something specific to this addon: on Blender
-  5.2.1, committing a property widget (a checkbox or number field drawn directly on a
-  CollectionProperty item, as used for this list) stalls the whole UI for a few seconds,
-  reproduced even with an isolated test panel that shared no code with this addon. Writing
-  the same properties from a small operator instead of a direct property widget avoids the
-  stall entirely, so the checkbox and piece-count controls now go through
-  `bfme.toggle_split_object` / `bfme.adjust_split_count`. The same underlying issue likely
-  also affects the per-bone timing sliders further down in the same panel; that hasn't been
-  fixed yet since it needs a different UI approach (a draggable percentage isn't a good fit
-  for an operator-driven +/- stepper)
+* Bugfix: editing a value in a list of the BfMe tools - Build-Up and Destroy Animation's
+  per-bone timings, Destroy Animation's splitting objects - froze Blender for several
+  seconds on every change. The W3D Model Browser kept its model list on the scene, a full
+  install's worth of rows, and on every such edit Blender looks up where the edited property
+  lives by walking the scene's registered lists, the model list included. That took about
+  3.4 s with 29,000 models and grows with the square of the list's size. The list now lives on
+  the window manager, where it is out of that walk: the same lookup takes well under a
+  millisecond. It is not saved into .blend files anymore either, where it added around 25 MB,
+  and opening a file saved with the list on the scene drops it from there
 * Bugfix: importing some W3D models (mostly older Renegade/BFME-era assets) failed outright
   with a `UnicodeDecodeError`. String fields (mesh user text, texture names, shader/vertex
   material names and arguments) were always decoded as UTF-8, but older exporters wrote them

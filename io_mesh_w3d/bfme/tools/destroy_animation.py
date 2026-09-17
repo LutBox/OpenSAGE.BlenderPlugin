@@ -11,48 +11,6 @@ from mathutils import Matrix, Quaternion, Vector
 from .. import utils
 
 
-class DESTROY_OT_toggle_split(Operator):
-    """Toggle whether one piece splits during destruction.
-
-    Writes the same 'use_split' property a checkbox bound directly to a
-    splitting_object_settings item would, but through an operator instead of a
-    direct property widget: in this Blender version, committing a property widget
-    on a CollectionProperty item (regardless of addon, property type, or content -
-    confirmed with an isolated test panel unrelated to this addon) stalls the UI
-    for several seconds, while an operator-driven write to the exact same property
-    is instant.
-    """
-    bl_idname = 'bfme.toggle_split_object'
-    bl_label = 'Toggle Split'
-    bl_options = {'INTERNAL'}
-
-    index: IntProperty()
-
-    def execute(self, context):
-        items = context.scene.splitting_object_settings
-        if 0 <= self.index < len(items):
-            items[self.index].use_split = not items[self.index].use_split
-        return {'FINISHED'}
-
-
-class DESTROY_OT_adjust_split_count(Operator):
-    """Step a piece's target split count up or down. See DESTROY_OT_toggle_split
-    for why this goes through an operator instead of a direct property widget."""
-    bl_idname = 'bfme.adjust_split_count'
-    bl_label = 'Adjust Piece Count'
-    bl_options = {'INTERNAL'}
-
-    index: IntProperty()
-    delta: IntProperty()
-
-    def execute(self, context):
-        items = context.scene.splitting_object_settings
-        if 0 <= self.index < len(items):
-            item = items[self.index]
-            item.split_count = max(2, min(100, item.split_count + self.delta))
-        return {'FINISHED'}
-
-
 class DESTROY_OT_create(Operator):
     bl_idname = 'bfme.destroy_animation'
     bl_label = 'Create Destroy Animation'
@@ -352,11 +310,6 @@ class DESTROY_OT_create(Operator):
 
 
 class SplittingObjectSettings(PropertyGroup):
-    # 'name' is Blender's own identity field for collection items and is deliberately
-    # left at its default rather than mirroring the mesh object's name: a collection
-    # item whose 'name' coincides with a real Object's name makes Blender itself take
-    # several seconds to respond to any property change on that row (reproduced with a
-    # minimal, otherwise-empty test panel - a Blender-internal quirk, not addon logic)
     object_name: StringProperty(name='Object Name')
     use_split: BoolProperty(name='Split', default=True)
     split_count: IntProperty(name='Pieces', default=4, min=2, max=100,
@@ -364,7 +317,6 @@ class SplittingObjectSettings(PropertyGroup):
 
 
 class DestroyBoneAnimSettings(PropertyGroup):
-    # see SplittingObjectSettings.object_name for why the bone name isn't stored in 'name'
     bone_name: StringProperty(name='Bone Name')
     start_percent: FloatProperty(
         name='Start', subtype='PERCENTAGE', default=0.0, min=0.0, max=100.0,
@@ -427,19 +379,11 @@ class DESTROY_PT_panel(Panel):
             if not len(scene.splitting_object_settings):
                 layout.label(text='No mesh children found.')
             else:
-                for idx, item in enumerate(scene.splitting_object_settings):
+                for item in scene.splitting_object_settings:
                     row = layout.row()
-                    icon = 'CHECKBOX_HLT' if item.use_split else 'CHECKBOX_DEHLT'
-                    toggle = row.operator('bfme.toggle_split_object', text=item.object_name,
-                                          icon=icon, emboss=False)
-                    toggle.index = idx
+                    row.prop(item, 'use_split', text=item.object_name)
                     if item.use_split:
-                        stepper = row.row(align=True)
-                        minus = stepper.operator('bfme.adjust_split_count', text='', icon='REMOVE')
-                        minus.index, minus.delta = idx, -1
-                        stepper.label(text=str(item.split_count))
-                        plus = stepper.operator('bfme.adjust_split_count', text='', icon='ADD')
-                        plus.index, plus.delta = idx, 1
+                        row.prop(item, 'split_count')
 
         row = layout.row()
         row.prop(scene, 'show_destroy_bone_settings', text='Per-Bone Timings',
@@ -470,8 +414,6 @@ CLASSES = (
     SplittingObjectSettings,
     DestroyBoneAnimSettings,
     DESTROY_PT_panel,
-    DESTROY_OT_toggle_split,
-    DESTROY_OT_adjust_split_count,
     DESTROY_OT_create)
 
 SCENE_PROPERTIES = (
