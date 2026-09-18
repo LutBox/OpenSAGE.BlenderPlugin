@@ -262,6 +262,15 @@ def create_material_from_shader_material(context, name, shader_mat):
 ##########################################################################
 
 
+def _descendants(obj):
+    # 'Object.children_recursive' was added in Blender 3.1; older versions need
+    # a manual walk. 'Object.children' itself is fine to recurse over here since
+    # it is only called once per root object below, not once per descendant.
+    for child in obj.children:
+        yield child
+        yield from _descendants(child)
+
+
 def flatten_materials(objects):
     """Every unique material used by the objects and their children, without recursion.
 
@@ -272,7 +281,8 @@ def flatten_materials(objects):
     materials = []
 
     for root in objects:
-        for obj in (root, *root.children_recursive):
+        descendants = root.children_recursive if bpy.app.version >= (3, 1, 0) else _descendants(root)
+        for obj in (root, *descendants):
             if obj.type != 'MESH' or obj.data is None:
                 continue
             for material in obj.data.materials:

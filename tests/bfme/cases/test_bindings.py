@@ -443,6 +443,12 @@ class TestAutoBindOperator(BindingsTestCase):
 
 
 class TestWeightColorBaking(BindingsTestCase):
+    def setUp(self):
+        super().setUp()
+        # the weight visualisation needs 'Mesh.color_attributes', added in Blender 3.2
+        if bpy.app.version < (3, 2, 0):
+            self.skipTest('color_attributes not available before Blender 3.2')
+
     def test_a_correctly_bound_vertex_is_not_the_problem_color(self):
         armature = self.create_armature({'bone': ((0, 0, 0), (0, 0, 1))})
         obj = self.create_mesh('m', [(0, 0, 0.5)])
@@ -507,6 +513,9 @@ class TestWeightColorBaking(BindingsTestCase):
         self.assertEqual(bindings.PROBLEM_COLOR, tuple(round(c, 2) for c in color[:3]))
 
     def test_bones_get_a_custom_color_assigned(self):
+        # 'Bone.color' (per-bone custom colors) was added in Blender 4.0
+        if bpy.app.version < (4, 0, 0):
+            self.skipTest('Bone.color not available before Blender 4.0')
         armature = self.create_armature({
             'a': ((0, 0, 0), (0, 0, 1)),
             'b': ((1, 0, 0), (1, 0, 1))})
@@ -528,6 +537,9 @@ class TestWeightColorBaking(BindingsTestCase):
 
 class TestShowWeightsToggle(BindingsTestCase):
     def test_toggling_off_removes_the_color_attribute(self):
+        # the weight visualisation needs 'Mesh.color_attributes', added in Blender 3.2
+        if bpy.app.version < (3, 2, 0):
+            self.skipTest('color_attributes not available before Blender 3.2')
         armature = self.create_armature({'bone': ((0, 0, 0), (0, 0, 1))})
         obj = self.create_mesh('m', [(0, 0, 0.5)])
         names, heads, tails = bindings._deform_bone_segments(armature)

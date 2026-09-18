@@ -203,11 +203,14 @@ class TestExistingAnimationsActionHandling(TestCase):
 
         # read the detached action back through a throwaway carrier, since reading its
         # fcurves requires an animation_data with both the action and its slot bound,
-        # and assigning .action alone doesn't rebind .action_slot
+        # and assigning .action alone doesn't rebind .action_slot. 'Action.slots' only
+        # exists from Blender 4.4's slotted actions onward; older versions have no
+        # such concept and read fcurves straight off the action once it is assigned
         carrier = bpy.data.objects.new('carrier', bpy.data.meshes.new('carrier'))
         carrier.animation_data_create()
         carrier.animation_data.action = original_action
-        carrier.animation_data.action_slot = original_action.slots[0]
+        if hasattr(original_action, 'slots'):
+            carrier.animation_data.action_slot = original_action.slots[0]
         original_fcurve = next(
             fc for fc in iter_action_fcurves(carrier.animation_data)
             if fc.data_path == 'pose.bones["bone1"].location' and fc.array_index == 0)

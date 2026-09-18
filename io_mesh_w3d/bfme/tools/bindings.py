@@ -298,7 +298,10 @@ class BFME_OT_auto_bind(Operator):
 def _apply_weight_colors(obj, bone_index_by_name, bone_colors):
     mesh = obj.data
     vertex_count = len(mesh.vertices)
-    if not vertex_count:
+    # 'Mesh.color_attributes' (needed for a per-vertex, POINT-domain layer) was
+    # added in Blender 3.2; older versions only have per-loop vertex colors, so
+    # this visualisation is simply unavailable there
+    if not vertex_count or bpy.app.version < (3, 2, 0):
         return
 
     group_to_bone = {group.index: bone_index_by_name[group.name]
@@ -357,6 +360,16 @@ def _set_viewport_display(show):
                     space.overlay.show_wireframes = False
 
 
+def _mode_set(armature_obj, mode):
+    # 'Context.temp_override' was added in Blender 3.2; older versions only
+    # have the positional context-override dict that it replaced
+    if bpy.app.version >= (3, 2, 0):
+        with bpy.context.temp_override(active_object=armature_obj, object=armature_obj):
+            bpy.ops.object.mode_set(mode=mode)
+    else:
+        bpy.ops.object.mode_set({'active_object': armature_obj, 'object': armature_obj}, mode=mode)
+
+
 def _enter_pose_mode(armature_obj):
     """Custom bone colors are only drawn in Edit or Pose Mode; Object Mode always
     shows the plain default bone shape regardless of Bone.color. Pose Mode is the
@@ -369,8 +382,7 @@ def _enter_pose_mode(armature_obj):
         previous_active = view_layer.objects.active
         view_layer.objects.active = armature_obj
         armature_obj.select_set(True)
-        with bpy.context.temp_override(active_object=armature_obj, object=armature_obj):
-            bpy.ops.object.mode_set(mode='POSE')
+        _mode_set(armature_obj, 'POSE')
         view_layer.objects.active = previous_active
     except RuntimeError as error:
         print(f'[BFME_BIND] could not enter Pose Mode on {armature_obj.name!r}: {error}')
@@ -380,8 +392,7 @@ def _exit_pose_mode(armature_obj):
     try:
         if armature_obj.mode != 'POSE':
             return
-        with bpy.context.temp_override(active_object=armature_obj, object=armature_obj):
-            bpy.ops.object.mode_set(mode='OBJECT')
+        _mode_set(armature_obj, 'OBJECT')
     except (RuntimeError, ReferenceError) as error:
         # ReferenceError: the armature could have been deleted while shown
         print(f'[BFME_BIND] could not leave Pose Mode: {error}')
@@ -394,7 +405,11 @@ def _bone_marker_mesh():
 
     mesh = bpy.data.meshes.new(BONE_MARKER_NAME)
     b_mesh = bmesh.new()
-    bmesh.ops.create_uvsphere(b_mesh, u_segments=8, v_segments=6, radius=1.0)
+    # 'create_uvsphere' took 'diameter' before Blender 3.0, 'radius' from then on
+    if bpy.app.version < (3, 0, 0):
+        bmesh.ops.create_uvsphere(b_mesh, u_segments=8, v_segments=6, diameter=2.0)
+    else:
+        bmesh.ops.create_uvsphere(b_mesh, u_segments=8, v_segments=6, radius=1.0)
     b_mesh.to_mesh(mesh)
     b_mesh.free()
     return mesh
@@ -431,7 +446,12 @@ def _apply_bone_markers(armature_obj):
     for pose_bone in armature_obj.pose.bones:
         pose_bone.custom_shape = marker
         pose_bone.use_custom_shape_bone_size = False
-        pose_bone.custom_shape_scale_xyz = (radius, radius, radius)
+        # 'custom_shape_scale_xyz' (per-axis) replaced the scalar
+        # 'custom_shape_scale' in Blender 3.0
+        if bpy.app.version < (3, 0, 0):
+            pose_bone.custom_shape_scale = radius
+        else:
+            pose_bone.custom_shape_scale_xyz = (radius, radius, radius)
 
     armature_obj.data.show_names = True
     # otherwise hidden behind whatever mesh the bone sits inside of
@@ -488,9 +508,12 @@ def refresh_weight_display(scene):
     _visualized_armature = armature_obj
 
     bone_colors = [bone_color(index, len(bone_names)) for index in range(len(bone_names))]
-    for index, bone in enumerate(armature_obj.data.bones):
-        bone.color.palette = 'CUSTOM'
-        bone.color.custom.normal = bone_colors[index]
+    # 'Bone.color' (per-bone custom colors) was added in Blender 4.0; older
+    # versions just keep the mesh/marker parts of this visualisation below
+    if bpy.app.version >= (4, 0, 0):
+        for index, bone in enumerate(armature_obj.data.bones):
+            bone.color.palette = 'CUSTOM'
+            bone.color.custom.normal = bone_colors[index]
 
     bone_index_by_name = {name: index for index, name in enumerate(bone_names)}
     for obj in bound_mesh_objects(scene, armature_obj):
